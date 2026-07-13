@@ -34,6 +34,7 @@ let taxiRouteLine = null;
 let simulatedCurrentPosition = null;
 let currentPositionMarker = null;
 let safetySettings = loadSafetySettings();
+let activeInfoWindow = null;
 
 const routeCard = document.getElementById("routeCard");
 const journeyCard = document.getElementById("journeyCard");
@@ -564,7 +565,7 @@ async function findSafeRouteWithinLimit(startAddress, destinationAddress) {
 function generateSafetyProfile(routeDistanceMeters) {
   const lightingOptions = ["Medium", "Medium/high", "High"];
   const densityOptions = ["Medium", "Medium/high", "High"];
-  const reportOptions = ["Low risk", "Very low risk", "Few recent reports"];
+  const reportOptions = ["Low risk", "Very low risk"];
 
   const routeKm = routeDistanceMeters / 1000;
 
@@ -726,6 +727,11 @@ function addSafetyDataMarkers(
     });
 
     marker.addListener("click", function () {
+      if (activeInfoWindow) {
+        activeInfoWindow.close();
+      }
+
+      activeInfoWindow = infoWindow;
       infoWindow.open(map, marker);
     });
 
@@ -759,6 +765,11 @@ function addSafetyDataMarkers(
     });
 
     marker.addListener("click", function () {
+      if (activeInfoWindow) {
+        activeInfoWindow.close();
+      }
+
+      activeInfoWindow = infoWindow;
       infoWindow.open(map, marker);
     });
 
@@ -1074,8 +1085,9 @@ function confirmSafe() {
   clearCheckInResponseTimer();
   hideElement(checkInOverlay);
 
-  document.getElementById("journeyStatus").textContent =
-    "Safety confirmed. Navigation continues.";
+  setSafeJourneyStatus(
+    "Safety confirmed. Navigation continues."
+  );
 
   document.getElementById("progressBar").style.width = "62%";
 }
@@ -1143,8 +1155,9 @@ function buildSupportNotificationText(prefix) {
 function showSupportResult(title, text) {
   document.getElementById("supportTitle").textContent = title;
   document.getElementById("supportText").textContent = text;
-  document.getElementById("journeyStatus").textContent =
-    "Support flow is active.";
+  setSafeJourneyStatus(
+    "Support flow is active."
+  );
 
   const escalateButton = document.getElementById("escalateButton");
 
@@ -1175,8 +1188,9 @@ function confirmEmergencyEscalation() {
   document.getElementById("supportText").textContent =
     "Emergency services have been notified and received your current location and Safe Journey status.";
 
-  document.getElementById("journeyStatus").textContent =
-    "Emergency escalation is active.";
+  setSafeJourneyStatus(
+    "Emergency escalation is active."
+  );
 
   hideElement(document.getElementById("escalateButton"));
 }
@@ -1382,7 +1396,7 @@ function showCurrentPositionMarker(position) {
   });
 }
 
-function showTaxiOptions() {
+async function showTaxiOptions() {
   if (!safeRoute) {
     return;
   }
@@ -1403,7 +1417,7 @@ function showTaxiOptions() {
 
   showCurrentPositionMarker(simulatedCurrentPosition);
 
-  createTaxiPickupMarkers();
+  await createTaxiPickupMarkers();
 
   hideElement(taxiOptionCard);
   showElement(taxiModeCard);
@@ -1411,77 +1425,177 @@ function showTaxiOptions() {
   setSafeJourneyStatus("Taxi pickup options are shown near the route.");
 }
 
-function createTaxiPickupMarkers() {
-  if (!safeRoute || !safeRoute.path || safeRoute.path.length < 2) {
+function generateNearbyTaxiPoint(
+  currentPosition
+) {
+  const minimumDistanceMeters = 120;
+  const maximumDistanceMeters = 850;
+
+  const distanceMeters =
+    minimumDistanceMeters +
+    Math.random() *
+    (
+      maximumDistanceMeters -
+      minimumDistanceMeters
+    );
+
+  const angle =
+    Math.random() * Math.PI * 2;
+
+  const latitudeOffset =
+    (
+      distanceMeters *
+      Math.cos(angle)
+    ) / 111320;
+
+  const longitudeOffset =
+    (
+      distanceMeters *
+      Math.sin(angle)
+    ) /
+    (
+      111320 *
+      Math.cos(
+        currentPosition.lat *
+        Math.PI /
+        180
+      )
+    );
+
+  return {
+    lat:
+      currentPosition.lat +
+      latitudeOffset,
+
+    lng:
+      currentPosition.lng +
+      longitudeOffset
+  };
+}
+
+async function createTaxiPickupMarkers() {
+  if (!simulatedCurrentPosition) {
     return;
   }
 
-  const routePath = convertPath(safeRoute.path);
+  const numberOfPickups =
+    getRandomNumber(1, 4);
 
-  const taxiOptions = [
-    {
-      title: "Taxi stand",
-      subtitle: "Taxi pickup point · approx. 7 min walk",
-      ratio: 0.42,
-      offset: 0.0012,
-    },
-    {
-      title: "Hotel pickup point",
-      subtitle: "Public pickup point · approx. 10 min walk",
-      ratio: 0.63,
-      offset: -0.0016,
-    },
-    {
-      title: "Station pickup area",
-      subtitle: "Taxi pickup area · approx. 14 min walk",
-      ratio: 0.82,
-      offset: 0.0021,
-    },
+  const pickupTitles = [
+    "Taxi pickup point",
+    "Taxi stand",
+    "Hotel pickup point",
+    "Public pickup point"
   ];
 
-  taxiOptions.forEach(function (option) {
-    const position = offsetPointNearRoute(
-      routePath,
-      option.ratio,
-      option.offset,
+  const validPickups = [];
+
+  let attempts = 0;
+  const maxAttempts = 30;
+
+  while (
+    validPickups.length < numberOfPickups &&
+    attempts < maxAttempts
+  ) {
+    attempts++;
+
+    const position =
+      generateNearbyTaxiPoint(
+        simulatedCurrentPosition
+      );
+
+    try {
+      const walkingRoute =
+        await computeRoute(
+          simulatedCurrentPosition,
+          position,
+          null
+        );
+
+      const walkingMinutes =
+        Math.max(
+          1,
+          Math.round(
+            walkingRoute.durationMillis / 60000
+          )
+        );
+
+      if (walkingMinutes > 12) {
+        continue;
+      }
+
+      validPickups.push({
+        title:
+          pickupTitles[
+            validPickups.length %
+            pickupTitles.length
+          ],
+        position: position,
+        walkingMinutes: walkingMinutes
+      });
+    } catch (error) {
+      console.error(
+        "Taxi pickup candidate skipped.",
+        error
+      );
+    }
+  }
+
+  validPickups.sort(function (a, b) {
+    return (
+      a.walkingMinutes -
+      b.walkingMinutes
     );
+  });
 
-    const marker = new google.maps.Marker({
-      map: map,
-      position: position,
-      title: option.title,
-      label: {
-        text: "T",
-        color: "#202124",
-        fontWeight: "bold",
-      },
-      icon: {
-        path: "M -10 -10 L 10 -10 L 10 10 L -10 10 Z",
-        fillColor: "#ffea00",
-        fillOpacity: 1,
-        strokeColor: "#202124",
-        strokeWeight: 2,
-        scale: 1,
-      },
-    });
+  validPickups.forEach(function (option) {
+    const marker =
+      new google.maps.Marker({
+        map: map,
+        position: option.position,
+        title: option.title,
+        label: {
+          text: "T",
+          color: "#202124",
+          fontWeight: "bold"
+        },
+        icon: {
+          path:
+            "M -10 -10 L 10 -10 L 10 10 L -10 10 Z",
+          fillColor: "#ffea00",
+          fillOpacity: 1,
+          strokeColor: "#202124",
+          strokeWeight: 2,
+          scale: 1
+        }
+      });
 
-    const infoWindow = new google.maps.InfoWindow({
-      content:
-        "<strong>" +
-        option.title +
-        "</strong><br>" +
-        option.subtitle +
-        "<br>" +
-        "<button class='map-popup-button' onclick='selectTaxiPickup(" +
-        JSON.stringify(position.lat) +
-        "," +
-        JSON.stringify(position.lng) +
-        ")'>Choose this pickup</button>",
-    });
+    const infoWindow =
+      new google.maps.InfoWindow({
+        content:
+          "<strong>" +
+          option.title +
+          "</strong><br>" +
+          "Approx. " +
+          option.walkingMinutes +
+          " min walk<br>" +
+          "<button class='map-popup-button' onclick='selectTaxiPickup(" +
+          JSON.stringify(
+            option.position.lat
+          ) +
+          "," +
+          JSON.stringify(
+            option.position.lng
+          ) +
+          ")'>Choose this pickup</button>"
+      });
 
-    marker.addListener("click", function () {
-      infoWindow.open(map, marker);
-    });
+    marker.addListener(
+      "click",
+      function () {
+        infoWindow.open(map, marker);
+      }
+    );
 
     taxiMarkers.push(marker);
   });
