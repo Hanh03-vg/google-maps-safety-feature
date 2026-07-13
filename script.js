@@ -1202,27 +1202,63 @@ function closeSupport() {
 
 function playAttentionSignal() {
   try {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const AudioContextClass =
+      window.AudioContext ||
+      window.webkitAudioContext;
 
     if (!AudioContextClass) {
       return;
     }
 
-    const audioContext = new AudioContextClass();
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
+    const audioContext =
+      new AudioContextClass();
 
-    oscillator.type = "sine";
-    oscillator.frequency.value = 880;
-    gain.gain.value = 0.08;
+    const alarmPattern = [
+      0,
+      0.28,
+      0.56
+    ];
 
-    oscillator.connect(gain);
-    gain.connect(audioContext.destination);
+    alarmPattern.forEach(function (startTime) {
+      const oscillator =
+        audioContext.createOscillator();
 
-    oscillator.start();
-    oscillator.stop(audioContext.currentTime + 0.35);
+      const gain =
+        audioContext.createGain();
+
+      oscillator.type = "square";
+      oscillator.frequency.value = 950;
+
+      gain.gain.setValueAtTime(
+        0.16,
+        audioContext.currentTime + startTime
+      );
+
+      gain.gain.exponentialRampToValueAtTime(
+        0.01,
+        audioContext.currentTime +
+          startTime +
+          0.18
+      );
+
+      oscillator.connect(gain);
+      gain.connect(audioContext.destination);
+
+      oscillator.start(
+        audioContext.currentTime + startTime
+      );
+
+      oscillator.stop(
+        audioContext.currentTime +
+          startTime +
+          0.18
+      );
+    });
   } catch (error) {
-    console.warn("Attention signal could not be played.", error);
+    console.warn(
+      "Attention signal could not be played.",
+      error
+    );
   }
 }
 
