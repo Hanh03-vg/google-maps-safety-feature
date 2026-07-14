@@ -709,55 +709,65 @@ async function findSafeRouteWithinLimit(
           -0.0025,
         ];
 
-  let bestRoute = null;
-  let bestSafePoint = null;
-  let smallestDetour = Infinity;
+  let bestPositiveRoute = null;
+  let bestPositiveSafePoint = null;
+  let smallestPositiveDetour = Infinity;
 
-  for (
-    const detourDistance of detourDistances
-  ) {
-    const safePoint =
-      calculateSafePoint(detourDistance);
+  let zeroDetourRoute = null;
+  let zeroDetourSafePoint = null;
 
-    const candidateRoute =
-      await computeRoute(
-        startAddress,
-        destinationAddress,
-        safePoint,
-      );
+  for (const detourDistance of detourDistances) {
+    const safePoint = calculateSafePoint(detourDistance);
 
-    const detourMinutes =
-      getDetourMinutes(candidateRoute);
+    const candidateRoute = await computeRoute(
+      startAddress,
+      destinationAddress,
+      safePoint,
+    );
 
-    const hasSelfOverlap =
-      routeHasSelfOverlap(candidateRoute);
+    const detourMinutes = getDetourMinutes(candidateRoute);
+    const hasSelfOverlap = routeHasSelfOverlap(candidateRoute);
 
     if (hasSelfOverlap) {
       continue;
     }
 
     if (
+      detourMinutes > 0 &&
       detourMinutes <= maxDetourMinutes &&
-      detourMinutes >= 0
+      detourMinutes < smallestPositiveDetour
     ) {
-      return {
-        route: candidateRoute,
-        safePoint: safePoint,
-      };
+      smallestPositiveDetour = detourMinutes;
+      bestPositiveRoute = candidateRoute;
+      bestPositiveSafePoint = safePoint;
     }
 
     if (
-      detourMinutes < smallestDetour
+      detourMinutes === 0 &&
+      !zeroDetourRoute
     ) {
-      smallestDetour = detourMinutes;
-      bestRoute = candidateRoute;
-      bestSafePoint = safePoint;
+      zeroDetourRoute = candidateRoute;
+      zeroDetourSafePoint = safePoint;
     }
   }
 
+  if (bestPositiveRoute) {
+    return {
+      route: bestPositiveRoute,
+      safePoint: bestPositiveSafePoint,
+    };
+  }
+
+  if (zeroDetourRoute) {
+    return {
+      route: zeroDetourRoute,
+      safePoint: zeroDetourSafePoint,
+    };
+  }
+
   return {
-    route: bestRoute,
-    safePoint: bestSafePoint,
+    route: normalRoute,
+    safePoint: null,
   };
 }
 
