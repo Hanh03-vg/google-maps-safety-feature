@@ -21,6 +21,7 @@ A browser-based concept for a safety-oriented extension of Google Maps. The appl
 - Configurable safety settings
 - Late-night notification entry point
 - Address autocomplete through Geoapify
+- Rural and urban route context classification through countries.dev place data
 
 ## User flow
 
@@ -34,7 +35,7 @@ A browser-based concept for a safety-oriented extension of Google Maps. The appl
 8. Monitoring detects unusual inactivity and opens a safety check-in.
 9. The user can confirm that they are safe or request help.
 10. If the check-in is unanswered, enabled support channels are notified.
-11. Emergency services can be notified only after an additional confirmation.
+11. Emergency services can be notified through the escalation action, sharing the current location and Safe Journey status.
 12. The user can alternatively display nearby taxi pickup options.
 
 ## Technologies
@@ -45,6 +46,7 @@ A browser-based concept for a safety-oriented extension of Google Maps. The appl
 - Google Maps JavaScript API
 - Google Routes API
 - Geoapify API
+- countries.dev Places API
 
 ## Project structure
 

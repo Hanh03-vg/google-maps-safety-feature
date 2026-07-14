@@ -440,52 +440,6 @@ button {
   display: none !important;
 }
 
-@media (max-width: 900px) {
-  .journey-card {
-    right: 12px;
-    bottom: 12px;
-  }
-}
-
-@media (max-width: 700px) {
-  .search-card,
-  .route-card {
-    left: 8px;
-    width: calc(100% - 16px);
-  }
-
-  .search-card {
-    top: 8px;
-  }
-
-  .route-card {
-    top: 127px;
-    max-height: calc(100vh - 135px);
-  }
-
-  .journey-card {
-    right: 8px;
-    bottom: 8px;
-    width: calc(100% - 16px);
-    max-height: calc(100vh - 16px);
-  }
-
-  .settings-button {
-    top: 136px;
-    right: 10px;
-  }
-
-  .settings-panel {
-    top: 186px;
-    right: 8px;
-    width: calc(100% - 16px);
-    max-height: calc(100vh - 194px);
-  }
-
-  .safety-grid {
-    grid-template-columns: 1fr;
-  }
-}
 /* ==========================================================================
    6. SAFE-ROUTE-INDIKATOREN UND AUTOCOMPLETE
    ========================================================================== */
@@ -972,4 +926,55 @@ button {
   margin: 0;
   color: #5f6368;
   font-size: 12px;
+}
+
+/* ==========================================================================
+   10. RESPONSIVE DESIGN
+   ========================================================================== */
+
+@media (max-width: 900px) {
+  .journey-card {
+    right: 12px;
+    bottom: 12px;
+  }
+}
+
+@media (max-width: 700px) {
+  .search-card,
+  .route-card {
+    left: 8px;
+    width: calc(100% - 16px);
+  }
+
+  .search-card {
+    top: 8px;
+  }
+
+  .route-card {
+    top: 127px;
+    max-height: calc(100vh - 135px);
+  }
+
+  .journey-card {
+    right: 8px;
+    bottom: 8px;
+    width: calc(100% - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  .settings-button {
+    top: 136px;
+    right: 10px;
+  }
+
+  .settings-panel {
+    top: 186px;
+    right: 8px;
+    width: calc(100% - 16px);
+    max-height: calc(100vh - 194px);
+  }
+
+  .safety-grid {
+    grid-template-columns: 1fr;
+  }
 }
