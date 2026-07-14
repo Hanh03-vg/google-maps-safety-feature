@@ -20,8 +20,8 @@ let safeRoute = null;
 let normalRouteLine = null;
 let safeRouteLine = null;
 let startMarker = null;
+let safeRoutePoint = null;
 let destinationMarker = null;
-let safePointMarker = null;
 let selectedMode = "normal";
 let safeRouteLoaded = false;
 let monitoringTimer = null;
@@ -41,9 +41,7 @@ const journeyCard = document.getElementById("journeyCard");
 const safeDetails = document.getElementById("safeDetails");
 const checkInOverlay = document.getElementById("checkInOverlay");
 const supportOverlay = document.getElementById("supportOverlay");
-const emergencyConfirmOverlay = document.getElementById(
-  "emergencyConfirmOverlay",
-);
+const supportIcon = document.getElementById("supportIcon");
 const statusMessage = document.getElementById("statusMessage");
 const featureInfo = document.getElementById("featureInfo");
 const taxiOptionCard = document.getElementById("taxiOptionCard");
@@ -53,10 +51,13 @@ const lateNightNotification = document.getElementById("lateNightNotification");
 const settingsPanel = document.getElementById("settingsPanel");
 const settingsButton = document.getElementById("settingsButton");
 const closeSettingsButton = document.getElementById("closeSettingsButton");
-const featureEmergencyContact = document.getElementById(
-  "featureEmergencyContact",
-);
+const featureEmergencyContact = document.getElementById("featureEmergencyContact");
 const featureCheckIn = document.getElementById("featureCheckIn");
+const featureAudibleAlert = document.getElementById("featureAudibleAlert");
+const checkInSettings = document.getElementById("checkInSettings");
+const alertTimingSettings = document.getElementById("alertTimingSettings");
+const stationaryMinutes = document.getElementById("stationaryMinutes");
+const responseMinutes = document.getElementById("responseMinutes");
 const featureLocalSupport = document.getElementById("featureLocalSupport");
 const featureTaxiPickup = document.getElementById("featureTaxiPickup");
 const contactManagement = document.getElementById("contactManagement");
@@ -145,15 +146,7 @@ function bindEvents() {
 
   document
     .getElementById("escalateButton")
-    .addEventListener("click", openEmergencyConfirmation);
-
-  document
-    .getElementById("confirmEmergencyButton")
     .addEventListener("click", confirmEmergencyEscalation);
-
-  document
-    .getElementById("cancelEmergencyButton")
-    .addEventListener("click", closeEmergencyConfirmation);
 
   document
     .getElementById("closeSupportButton")
@@ -195,12 +188,15 @@ function bindEvents() {
 
   closeSettingsButton.addEventListener("click", closeSettingsPanel);
 
-  featureEmergencyContact.addEventListener(
-    "change",
-    updateSafetySettingsFromPanel,
-  );
+  featureEmergencyContact.addEventListener("change", updateSafetySettingsFromPanel);
 
   featureCheckIn.addEventListener("change", updateSafetySettingsFromPanel);
+
+  featureAudibleAlert.addEventListener("change", updateSafetySettingsFromPanel);
+
+  stationaryMinutes.addEventListener("change", updateSafetySettingsFromPanel);
+
+  responseMinutes.addEventListener("change", updateSafetySettingsFromPanel);
 
   featureLocalSupport.addEventListener("change", updateSafetySettingsFromPanel);
 
@@ -271,6 +267,7 @@ async function searchNormalRoute() {
     clearAllRoutes();
 
     safeRoute = null;
+    safeRoutePoint = null;
     safeRouteLoaded = false;
 
     normalRoute = await computeRoute(startAddress, destinationAddress, null);
@@ -358,7 +355,6 @@ function clearAllRoutes() {
 
   removeMarker(startMarker);
   removeMarker(destinationMarker);
-  removeMarker(safePointMarker);
 
   clearSafetyDataMarkers();
   clearTaxiMarkers();
@@ -370,7 +366,6 @@ function clearAllRoutes() {
 
   startMarker = null;
   destinationMarker = null;
-  safePointMarker = null;
 }
 
 function createEndpointMarkers() {
@@ -640,7 +635,6 @@ function getRandomNumber(min, max) {
 function updateSafetyIndicators(profile) {
   safeDetails.innerHTML =
     "<h3>Why this route is safer</h3>" +
-    "<p class='prototype-note'>Safety indicators are simulated for prototype evaluation.</p>" +
     "<div class='safety-grid'>" +
     "<div><strong>Street lighting</strong><span>" +
     profile.streetLighting +
@@ -738,10 +732,21 @@ function addSafetyDataMarkers(
     safetyDataMarkers.push(marker);
   }
 
-  for (let i = 1; i < verifiedSafePointCount; i++) {
-    const ratio = (i + 1) / (verifiedSafePointCount + 1);
+  for (let i = 0; i < verifiedSafePointCount; i++) {
+    let markerPosition;
 
-    const markerPosition = offsetPointNearRoute(routePath, ratio, 0.00055);
+    if (i === 0 && safePoint) {
+      markerPosition = safePoint;
+    } else {
+      const ratio =
+        (i + 1) / (verifiedSafePointCount + 1);
+
+      markerPosition = offsetPointNearRoute(
+        routePath,
+        ratio,
+        0.00055
+      );
+    }
 
     const marker = new google.maps.Marker({
       map: map,
@@ -848,23 +853,11 @@ async function showSafeRoute() {
 
       const safePoint = safeRouteResult.safePoint;
 
+      safeRoutePoint = safePoint;
+
       safeRouteLoaded = true;
 
       drawSafeRoute();
-
-      safePointMarker = new google.maps.Marker({
-        map: map,
-        position: safePoint,
-        title: "Verified safe point",
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          fillColor: "#188038",
-          fillOpacity: 1,
-          strokeColor: "#ffffff",
-          strokeWeight: 3,
-          scale: 9,
-        },
-      });
 
       currentSafetyProfile = generateSafetyProfile(safeRoute.distanceMeters);
 
@@ -879,13 +872,9 @@ async function showSafeRoute() {
     } else if (safeRouteLine) {
       safeRouteLine.setMap(map);
 
-      if (safePointMarker) {
-        safePointMarker.setMap(map);
-      }
-
-      if (currentSafetyProfile && safePointMarker) {
+      if (currentSafetyProfile) {
         addSafetyDataMarkers(
-          safePointMarker.getPosition().toJSON(),
+          safeRoutePoint,
           currentSafetyProfile.openBusinesses,
           currentSafetyProfile.verifiedSafePoints,
         );
@@ -932,7 +921,6 @@ function showNormalRoute() {
     normalRouteLine.setMap(map);
   }
 
-  removeMarker(safePointMarker);
   clearSafetyDataMarkers();
 
   selectedMode = "normal";
@@ -1061,12 +1049,16 @@ function closeJourney() {
   clearSafetyTimers();
   hideElement(checkInOverlay);
   hideElement(supportOverlay);
-  hideElement(emergencyConfirmOverlay);
   hideElement(journeyCard);
   showElement(routeCard);
 }
 
 function openCheckIn() {
+  document.getElementById("checkInText").textContent =
+    "You have remained in the same location for " +
+    safetySettings.stationaryMinutes +
+    " minutes. Please confirm your status.";
+
   showElement(checkInOverlay);
 
   if (checkInResponseTimer) {
@@ -1106,13 +1098,23 @@ function handleUnansweredCheckIn() {
   checkInResponseTimer = null;
   hideElement(checkInOverlay);
 
-  playAttentionSignal();
+  let alertMessage =
+    "No response was received for " +
+    safetySettings.responseMinutes +
+    " minutes after the safety check-in.";
+
+  if (safetySettings.audibleAlert) {
+    playAttentionSignal();
+
+    alertMessage =
+      "An alert was activated after " +
+      safetySettings.responseMinutes +
+      " minutes without a response.";
+  }
 
   showSupportResult(
     "No response received",
-    buildSupportNotificationText(
-      "An audible alert was activated after the unanswered check-in.",
-    ),
+    buildSupportNotificationText(alertMessage),
   );
 }
 
@@ -1153,15 +1155,27 @@ function buildSupportNotificationText(prefix) {
 }
 
 function showSupportResult(title, text) {
-  document.getElementById("supportTitle").textContent = title;
-  document.getElementById("supportText").textContent = text;
+  document.getElementById("supportTitle").textContent =
+    title;
+
+  document.getElementById("supportText").textContent =
+    text;
+
+  if (title === "No response received") {
+    supportIcon.textContent = "!";
+    supportIcon.classList.add("warning");
+  } else {
+    supportIcon.textContent = "✓";
+    supportIcon.classList.remove("warning");
+  }
+
   setSafeJourneyStatus(
     "Support flow is active."
   );
 
-  const escalateButton = document.getElementById("escalateButton");
+  const escalateButton =
+    document.getElementById("escalateButton");
 
-  // Notruf bleibt ein bewusster, zusätzlicher Schritt.
   if (safetySettings.localSupport) {
     showElement(escalateButton);
   } else {
@@ -1171,16 +1185,10 @@ function showSupportResult(title, text) {
   showElement(supportOverlay);
 }
 
-function openEmergencyConfirmation() {
-  showElement(emergencyConfirmOverlay);
-}
-
-function closeEmergencyConfirmation() {
-  hideElement(emergencyConfirmOverlay);
-}
 
 function confirmEmergencyEscalation() {
-  hideElement(emergencyConfirmOverlay);
+  supportIcon.textContent = "✓";
+  supportIcon.classList.remove("warning");
 
   document.getElementById("supportTitle").textContent =
     "Emergency services notified";
@@ -1197,7 +1205,6 @@ function confirmEmergencyEscalation() {
 
 function closeSupport() {
   hideElement(supportOverlay);
-  hideElement(emergencyConfirmOverlay);
 }
 
 function playAttentionSignal() {
@@ -1441,10 +1448,6 @@ async function showTaxiOptions() {
   clearTaxiRoute();
   clearSafetyDataMarkers();
 
-  if (safePointMarker) {
-    safePointMarker.setMap(null);
-  }
-
   simulatedCurrentPosition = getSimulatedCurrentPosition();
 
   if (!simulatedCurrentPosition) {
@@ -1626,12 +1629,14 @@ async function createTaxiPickupMarkers() {
           ")'>Choose this pickup</button>"
       });
 
-    marker.addListener(
-      "click",
-      function () {
-        infoWindow.open(map, marker);
+    marker.addListener("click", function () {
+      if (activeInfoWindow) {
+        activeInfoWindow.close();
       }
-    );
+
+      activeInfoWindow = infoWindow;
+      infoWindow.open(map, marker);
+    });
 
     taxiMarkers.push(marker);
   });
@@ -1685,8 +1690,7 @@ async function selectTaxiPickup(lat, lng) {
   } catch (error) {
     console.error(error);
 
-    document.getElementById("journeyStatus").textContent =
-      "Taxi pickup route could not be calculated.";
+    setSafeJourneyStatus("Taxi pickup route could not be calculated.");
   }
 }
 
@@ -1700,13 +1704,9 @@ function returnToSafeRoute() {
     safeRouteLine.setMap(map);
   }
 
-  if (safePointMarker) {
-    safePointMarker.setMap(map);
-  }
-
-  if (currentSafetyProfile && safePointMarker) {
+  if (currentSafetyProfile) {
     addSafetyDataMarkers(
-      safePointMarker.getPosition().toJSON(),
+      safeRoutePoint,
       currentSafetyProfile.openBusinesses,
       currentSafetyProfile.verifiedSafePoints,
     );
@@ -1762,6 +1762,9 @@ function loadSafetySettings() {
     return {
       emergencyContact: parsedSettings.emergencyContact ?? true,
       checkIn: parsedSettings.checkIn ?? true,
+      stationaryMinutes: parsedSettings.stationaryMinutes ?? 5,
+      audibleAlert: parsedSettings.audibleAlert ?? true,
+      responseMinutes: parsedSettings.responseMinutes ?? 1,
       localSupport: parsedSettings.localSupport ?? true,
       taxiPickup: parsedSettings.taxiPickup ?? true,
       contacts: Array.isArray(parsedSettings.contacts)
@@ -1773,6 +1776,9 @@ function loadSafetySettings() {
   return {
     emergencyContact: true,
     checkIn: true,
+    stationaryMinutes: 5,
+    audibleAlert: true,
+    responseMinutes: 1,
     localSupport: true,
     taxiPickup: true,
     contacts: ["Anna"],
@@ -1797,6 +1803,24 @@ function updateSafetySettingsFromPanel() {
 
   safetySettings.checkIn = featureCheckIn.checked;
 
+  safetySettings.stationaryMinutes = Math.min(
+    20,
+    Math.max(
+      5,
+      Number(stationaryMinutes.value) || 5,
+    ),
+  );
+
+  safetySettings.audibleAlert = featureAudibleAlert.checked;
+
+  safetySettings.responseMinutes = Math.min(
+    10,
+    Math.max(
+      1,
+      Number(responseMinutes.value) || 1,
+    ),
+  );
+
   safetySettings.localSupport = featureLocalSupport.checked;
 
   safetySettings.taxiPickup = featureTaxiPickup.checked;
@@ -1810,6 +1834,22 @@ function renderSettingsPanel() {
   featureEmergencyContact.checked = safetySettings.emergencyContact;
 
   featureCheckIn.checked = safetySettings.checkIn;
+
+  stationaryMinutes.value = String(safetySettings.stationaryMinutes);
+
+  featureAudibleAlert.checked = safetySettings.audibleAlert;
+
+  responseMinutes.value = String(safetySettings.responseMinutes);
+
+  checkInSettings.classList.toggle(
+    "hidden",
+    !safetySettings.checkIn,
+  );
+
+  alertTimingSettings.classList.toggle(
+    "hidden",
+    !safetySettings.audibleAlert,
+  );
 
   featureLocalSupport.checked = safetySettings.localSupport;
 
@@ -1886,7 +1926,6 @@ function applyFeatureVisibility() {
 
   if (!safetySettings.localSupport) {
     hideElement(supportOverlay);
-    hideElement(emergencyConfirmOverlay);
   }
 }
 
