@@ -13,6 +13,26 @@ const CHECK_IN_TRIGGER_DELAY_MS = 12000;
 // Im realen Produkt wäre dieser Wert deutlich länger und fachlich zu validieren.
 const CHECK_IN_RESPONSE_TIMEOUT_MS = 25000;
 
+const URBAN_CITY_DISTANCE_KM = 3;
+
+/*
+ * Die Sicherheitsprofile definieren die simulierten Umgebungsbedingungen
+ * für städtische und ländliche Routen.
+ */
+const AREA_PROFILES = {
+  urban: {
+    lightingOptions: ["Medium", "Medium/high", "High"],
+    densityOptions: ["Medium", "Medium/high", "High"],
+    reportOptions: ["Low risk", "Very low risk"],
+  },
+
+  rural: {
+    lightingOptions: ["Low/medium", "Medium"],
+    densityOptions: ["Low", "Very low"],
+    reportOptions: ["Low risk", "Very low risk"],
+  },
+};
+
 let map = null;
 let RouteClass = null;
 let normalRoute = null;
@@ -36,7 +56,7 @@ let simulatedCurrentPosition = null;
 let currentPositionMarker = null;
 let safetySettings = loadSafetySettings();
 let activeInfoWindow = null;
-
+let currentAreaType = "urban";
 
 const routeCard = document.getElementById("routeCard");
 const journeyCard = document.getElementById("journeyCard");
@@ -53,7 +73,9 @@ const lateNightNotification = document.getElementById("lateNightNotification");
 const settingsPanel = document.getElementById("settingsPanel");
 const settingsButton = document.getElementById("settingsButton");
 const closeSettingsButton = document.getElementById("closeSettingsButton");
-const featureEmergencyContact = document.getElementById("featureEmergencyContact");
+const featureEmergencyContact = document.getElementById(
+  "featureEmergencyContact",
+);
 const featureCheckIn = document.getElementById("featureCheckIn");
 const featureAudibleAlert = document.getElementById("featureAudibleAlert");
 const checkInSettings = document.getElementById("checkInSettings");
@@ -190,19 +212,40 @@ function bindEvents() {
 
   closeSettingsButton.addEventListener("click", closeSettingsPanel);
 
-  featureEmergencyContact.addEventListener("change", updateSafetySettingsFromPanel);
+  featureEmergencyContact.addEventListener(
+    "change",
+    updateSafetySettingsFromPanel,
+  );
 
-  featureCheckIn.addEventListener("change", updateSafetySettingsFromPanel);
+  featureCheckIn.addEventListener(
+    "change",
+    updateSafetySettingsFromPanel,
+  );
 
-  featureAudibleAlert.addEventListener("change", updateSafetySettingsFromPanel);
+  featureAudibleAlert.addEventListener(
+    "change",
+    updateSafetySettingsFromPanel,
+  );
 
-  stationaryMinutes.addEventListener("change", updateSafetySettingsFromPanel);
+  stationaryMinutes.addEventListener(
+    "change",
+    updateSafetySettingsFromPanel,
+  );
 
-  responseMinutes.addEventListener("change", updateSafetySettingsFromPanel);
+  responseMinutes.addEventListener(
+    "change",
+    updateSafetySettingsFromPanel,
+  );
 
-  featureLocalSupport.addEventListener("change", updateSafetySettingsFromPanel);
+  featureLocalSupport.addEventListener(
+    "change",
+    updateSafetySettingsFromPanel,
+  );
 
-  featureTaxiPickup.addEventListener("change", updateSafetySettingsFromPanel);
+  featureTaxiPickup.addEventListener(
+    "change",
+    updateSafetySettingsFromPanel,
+  );
 
   addContactButton.addEventListener("click", addEmergencyContact);
 
@@ -273,7 +316,13 @@ async function searchNormalRoute() {
     safeRouteLoaded = false;
     taxiPickupOptions = [];
 
-    normalRoute = await computeRoute(startAddress, destinationAddress, null);
+    normalRoute = await computeRoute(
+      startAddress,
+      destinationAddress,
+      null,
+    );
+
+    currentAreaType = await determineAreaType(normalRoute);
 
     drawNormalRoute();
     updateNormalSummary();
@@ -292,7 +341,8 @@ async function searchNormalRoute() {
     document.getElementById("safeRouteSummary").textContent =
       "Prioritise safety";
 
-    document.getElementById("startJourneyButton").textContent = "Start";
+    document.getElementById("startJourneyButton").textContent =
+      "Start";
 
     showElement(routeCard);
 
@@ -300,7 +350,85 @@ async function searchNormalRoute() {
   } catch (error) {
     console.error(error);
 
-    setStatus(error.message || "The route could not be loaded.");
+    setStatus(
+      error.message ||
+      "The route could not be loaded.",
+    );
+  }
+}
+
+async function getNearestPopulatedPlace(point) {
+  const url = `https://countries.dev/places/near?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}&limit=20`;
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error("Area classification request failed.");
+  }
+
+  const places = await response.json();
+
+  if (!Array.isArray(places)) {
+    return null;
+  }
+
+  return places.find((place) => place.featureClass === "P") || null;
+}
+
+function getPlaceDistanceKm(place) {
+  if (!place) {
+    return null;
+  }
+
+  const distance =
+    place.distanceKm ??
+    place.distance_km ??
+    place.distance?.km ??
+    place.distance;
+
+  const numericDistance = Number(distance);
+
+  return Number.isFinite(numericDistance) ? numericDistance : null;
+}
+
+async function classifyLocationContext(point) {
+  const nearestPlace = await getNearestPopulatedPlace(point);
+
+  if (!nearestPlace) {
+    return "rural";
+  }
+
+  const distanceKm = getPlaceDistanceKm(nearestPlace);
+
+  if (distanceKm === null || distanceKm > URBAN_CITY_DISTANCE_KM) {
+    return "rural";
+  }
+
+  const population = Number(nearestPlace.population) || 0;
+
+  return population >= 10000 ? "urban" : "rural";
+}
+
+async function determineAreaType(route) {
+  if (!route?.path || route.path.length < 2) {
+    return "urban";
+  }
+
+  const path = convertPath(route.path);
+  const startPoint = path[0];
+  const destinationPoint = path[path.length - 1];
+
+  try {
+    const [startContext, destinationContext] = await Promise.all([
+      classifyLocationContext(startPoint),
+      classifyLocationContext(destinationPoint),
+    ]);
+
+    return startContext === "rural" && destinationContext === "rural"
+      ? "rural"
+      : "urban";
+  } catch (error) {
+    console.warn("Area classification could not be completed.", error);
+    return "urban";
   }
 }
 
@@ -404,7 +532,10 @@ function calculateSafePoint(detourDistance) {
 
   const previousIndex = Math.max(0, middleIndex - 3);
 
-  const nextIndex = Math.min(convertedPath.length - 1, middleIndex + 3);
+  const nextIndex = Math.min(
+    convertedPath.length - 1,
+    middleIndex + 3,
+  );
 
   const middlePoint = convertedPath[middleIndex];
 
@@ -412,12 +543,15 @@ function calculateSafePoint(detourDistance) {
 
   const nextPoint = convertedPath[nextIndex];
 
-  const directionLat = nextPoint.lat - previousPoint.lat;
+  const directionLat =
+    nextPoint.lat - previousPoint.lat;
 
-  const directionLng = nextPoint.lng - previousPoint.lng;
+  const directionLng =
+    nextPoint.lng - previousPoint.lng;
 
   const length = Math.sqrt(
-    directionLat * directionLat + directionLng * directionLng,
+    directionLat * directionLat +
+      directionLng * directionLng,
   );
 
   if (length === 0) {
@@ -427,14 +561,20 @@ function calculateSafePoint(detourDistance) {
     };
   }
 
-  const perpendicularLat = -directionLng / length;
+  const perpendicularLat =
+    -directionLng / length;
 
-  const perpendicularLng = directionLat / length;
+  const perpendicularLng =
+    directionLat / length;
 
   return {
-    lat: middlePoint.lat + perpendicularLat * detourDistance,
+    lat:
+      middlePoint.lat +
+      perpendicularLat * detourDistance,
 
-    lng: middlePoint.lng + perpendicularLng * detourDistance,
+    lng:
+      middlePoint.lng +
+      perpendicularLng * detourDistance,
   };
 }
 
@@ -448,25 +588,44 @@ function getDetourMinutes(route) {
     return 0;
   }
 
-  const normalMinutes = Math.round(normalRoute.durationMillis / 60000);
+  const normalMinutes = Math.round(
+    normalRoute.durationMillis / 60000,
+  );
 
-  const routeMinutes = Math.round(route.durationMillis / 60000);
+  const routeMinutes = Math.round(
+    route.durationMillis / 60000,
+  );
 
   return routeMinutes - normalMinutes;
 }
 
 function routeHasSelfOverlap(route) {
-  if (!route || !route.path || route.path.length < 8) {
+  if (
+    !route ||
+    !route.path ||
+    route.path.length < 8
+  ) {
     return false;
   }
 
   const path = convertPath(route.path);
 
-  const minimumIndexGap = Math.max(8, Math.floor(path.length * 0.12));
+  const minimumIndexGap = Math.max(
+    8,
+    Math.floor(path.length * 0.12),
+  );
 
   for (let i = 0; i < path.length; i += 2) {
-    for (let j = i + minimumIndexGap; j < path.length; j += 2) {
-      const distance = calculateDistanceMeters(path[i], path[j]);
+    for (
+      let j = i + minimumIndexGap;
+      j < path.length;
+      j += 2
+    ) {
+      const distance =
+        calculateDistanceMeters(
+          path[i],
+          path[j],
+        );
 
       if (distance < 25) {
         return true;
@@ -477,26 +636,43 @@ function routeHasSelfOverlap(route) {
   return false;
 }
 
-function calculateDistanceMeters(pointA, pointB) {
+function calculateDistanceMeters(
+  pointA,
+  pointB,
+) {
   const earthRadius = 6371000;
 
-  const latA = (pointA.lat * Math.PI) / 180;
+  const latA =
+    (pointA.lat * Math.PI) / 180;
 
-  const latB = (pointB.lat * Math.PI) / 180;
+  const latB =
+    (pointB.lat * Math.PI) / 180;
 
-  const latDifference = ((pointB.lat - pointA.lat) * Math.PI) / 180;
+  const latDifference =
+    ((pointB.lat - pointA.lat) *
+      Math.PI) /
+    180;
 
-  const lngDifference = ((pointB.lng - pointA.lng) * Math.PI) / 180;
+  const lngDifference =
+    ((pointB.lng - pointA.lng) *
+      Math.PI) /
+    180;
 
   const haversine =
-    Math.sin(latDifference / 2) * Math.sin(latDifference / 2) +
+    Math.sin(latDifference / 2) *
+      Math.sin(latDifference / 2) +
     Math.cos(latA) *
       Math.cos(latB) *
       Math.sin(lngDifference / 2) *
       Math.sin(lngDifference / 2);
 
   return (
-    earthRadius * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine))
+    earthRadius *
+    2 *
+    Math.atan2(
+      Math.sqrt(haversine),
+      Math.sqrt(1 - haversine),
+    )
   );
 }
 
@@ -504,44 +680,75 @@ function calculateDistanceMeters(pointA, pointB) {
    4. SAFE-ROUTE-LOGIK
    ========================================================================== */
 
-// Mehrere seitliche Zwischenpunkte werden getestet, damit die Alternative
-// sicherer wirken kann, ohne einen unplausiblen Umweg oder Selbstüberschneidung.
-async function findSafeRouteWithinLimit(startAddress, destinationAddress) {
+async function findSafeRouteWithinLimit(
+  startAddress,
+  destinationAddress,
+) {
   const maxDetourMinutes = 10;
 
-  const detourDistances = [
-    0.0008, -0.0008, 0.0012, -0.0012, 0.0018, -0.0018, 0.0025, -0.0025,
-  ];
+  const detourDistances =
+    currentAreaType === "rural"
+      ? [
+          0.0004,
+          -0.0004,
+          0.0008,
+          -0.0008,
+          0.0012,
+          -0.0012,
+          0.0018,
+          -0.0018,
+        ]
+      : [
+          0.0008,
+          -0.0008,
+          0.0012,
+          -0.0012,
+          0.0018,
+          -0.0018,
+          0.0025,
+          -0.0025,
+        ];
 
   let bestRoute = null;
   let bestSafePoint = null;
   let smallestDetour = Infinity;
 
-  for (const detourDistance of detourDistances) {
-    const safePoint = calculateSafePoint(detourDistance);
+  for (
+    const detourDistance of detourDistances
+  ) {
+    const safePoint =
+      calculateSafePoint(detourDistance);
 
-    const candidateRoute = await computeRoute(
-      startAddress,
-      destinationAddress,
-      safePoint,
-    );
+    const candidateRoute =
+      await computeRoute(
+        startAddress,
+        destinationAddress,
+        safePoint,
+      );
 
-    const detourMinutes = getDetourMinutes(candidateRoute);
+    const detourMinutes =
+      getDetourMinutes(candidateRoute);
 
-    const hasSelfOverlap = routeHasSelfOverlap(candidateRoute);
+    const hasSelfOverlap =
+      routeHasSelfOverlap(candidateRoute);
 
     if (hasSelfOverlap) {
       continue;
     }
 
-    if (detourMinutes <= maxDetourMinutes && detourMinutes >= 0) {
+    if (
+      detourMinutes <= maxDetourMinutes &&
+      detourMinutes >= 0
+    ) {
       return {
         route: candidateRoute,
         safePoint: safePoint,
       };
     }
 
-    if (detourMinutes < smallestDetour) {
+    if (
+      detourMinutes < smallestDetour
+    ) {
       smallestDetour = detourMinutes;
       bestRoute = candidateRoute;
       bestSafePoint = safePoint;
@@ -558,48 +765,97 @@ async function findSafeRouteWithinLimit(startAddress, destinationAddress) {
    5. SICHERHEITSINDIKATOREN UND KARTENMARKER
    ========================================================================== */
 
-// Die Anzahl der simulierten Orte skaliert mit der Routenlänge.
-// Dadurch stimmen Anzeige und sichtbare Marker nachvollziehbar überein.
-function generateSafetyProfile(routeDistanceMeters) {
-  const lightingOptions = ["Medium", "Medium/high", "High"];
-  const densityOptions = ["Medium", "Medium/high", "High"];
-  const reportOptions = ["Low risk", "Very low risk"];
+function generateSafetyProfile(
+  routeDistanceMeters,
+) {
+  const areaProfile =
+    AREA_PROFILES[currentAreaType];
 
-  const routeKm = routeDistanceMeters / 1000;
+  const routeKm =
+    routeDistanceMeters / 1000;
 
-  let openBusinessMin = 2;
-  let openBusinessMax = 4;
-  let verifiedMin = 1;
-  let verifiedMax = 1;
+  let openBusinessMin;
+  let openBusinessMax;
+  let verifiedMin;
+  let verifiedMax;
 
-  if (routeKm < 1) {
-    openBusinessMin = 1;
-    openBusinessMax = 3;
-    verifiedMin = 1;
+  if (currentAreaType === "rural") {
+   
+    if (routeKm < 3) {
+      openBusinessMin = 0;
+      openBusinessMax = 1;
+    } else if (routeKm < 8) {
+      openBusinessMin = 0;
+      openBusinessMax = 1;
+    } else {
+      openBusinessMin = 1;
+      openBusinessMax = 2;
+    }
+
+    verifiedMin = 0;
     verifiedMax = 1;
-  } else if (routeKm < 3) {
-    openBusinessMin = 3;
-    openBusinessMax = 6;
-    verifiedMin = 1;
-    verifiedMax = 2;
-  } else if (routeKm < 8) {
-    openBusinessMin = 5;
-    openBusinessMax = 9;
-    verifiedMin = 1;
-    verifiedMax = 3;
   } else {
-    openBusinessMin = 8;
-    openBusinessMax = 14;
-    verifiedMin = 2;
-    verifiedMax = 4;
+    if (routeKm < 1) {
+      openBusinessMin = 1;
+      openBusinessMax = 3;
+      verifiedMin = 1;
+      verifiedMax = 1;
+    } else if (routeKm < 3) {
+      openBusinessMin = 3;
+      openBusinessMax = 6;
+      verifiedMin = 1;
+      verifiedMax = 2;
+    } else if (routeKm < 8) {
+      openBusinessMin = 5;
+      openBusinessMax = 9;
+      verifiedMin = 1;
+      verifiedMax = 3;
+    } else {
+      openBusinessMin = 8;
+      openBusinessMax = 14;
+      verifiedMin = 2;
+      verifiedMax = 4;
+    }
+  }
+
+  let openBusinesses =
+    getRandomNumber(
+      openBusinessMin,
+      openBusinessMax,
+    );
+
+  const verifiedSafePoints =
+    currentAreaType === "rural"
+      ? Math.random() < 0.2
+        ? 1
+        : 0
+      : getRandomNumber(
+          verifiedMin,
+          verifiedMax,
+        );
+
+  if (
+    currentAreaType === "rural" &&
+    verifiedSafePoints > 0 &&
+    openBusinesses > 0
+  ) {
+    openBusinesses -= 1;
   }
 
   return {
-    streetLighting: pickRandom(lightingOptions),
-    openBusinesses: getRandomNumber(openBusinessMin, openBusinessMax),
-    travelDensity: pickRandom(densityOptions),
-    safetyReports: pickRandom(reportOptions),
-    verifiedSafePoints: getRandomNumber(verifiedMin, verifiedMax),
+    areaType: currentAreaType,
+    streetLighting: pickRandom(
+      areaProfile.lightingOptions,
+    ),
+    openBusinesses: openBusinesses,
+    travelDensity: pickRandom(
+      areaProfile.densityOptions,
+    ),
+    safetyReports: pickRandom(
+      areaProfile.reportOptions,
+    ),
+    verifiedSafePoints:
+      verifiedSafePoints,
     estimatedDetour: "Calculating...",
   };
 }
@@ -614,11 +870,16 @@ function calculateDetourText() {
     return "Small detour";
   }
 
-  const normalMinutes = Math.round(normalRoute.durationMillis / 60000);
+  const normalMinutes = Math.round(
+    normalRoute.durationMillis / 60000,
+  );
 
-  const safeMinutes = Math.round(safeRoute.durationMillis / 60000);
+  const safeMinutes = Math.round(
+    safeRoute.durationMillis / 60000,
+  );
 
-  const difference = safeMinutes - normalMinutes;
+  const difference =
+    safeMinutes - normalMinutes;
 
   if (difference <= 0) {
     return "No extra time";
@@ -628,14 +889,26 @@ function calculateDetourText() {
 }
 
 function pickRandom(items) {
-  return items[Math.floor(Math.random() * items.length)];
+  return items[
+    Math.floor(Math.random() * items.length)
+  ];
 }
 
 function getRandomNumber(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return (
+    Math.floor(
+      Math.random() * (max - min + 1),
+    ) + min
+  );
 }
 
 function updateSafetyIndicators(profile) {
+  const safePointText =
+    profile.verifiedSafePoints === 1
+      ? "1 nearby"
+      : profile.verifiedSafePoints +
+        " nearby";
+
   safeDetails.innerHTML =
     "<h3>Why this route is safer</h3>" +
     "<div class='safety-grid'>" +
@@ -652,8 +925,8 @@ function updateSafetyIndicators(profile) {
     profile.safetyReports +
     "</span></div>" +
     "<div><strong><span class='legend-dot safe-dot'></span>Verified safe point</strong><span>" +
-    profile.verifiedSafePoints +
-    " nearby</span></div>" +
+    safePointText +
+    "</span></div>" +
     "<div><strong>Estimated detour</strong><span>" +
     calculateDetourText() +
     "</span></div>" +
@@ -661,9 +934,11 @@ function updateSafetyIndicators(profile) {
 }
 
 function clearSafetyDataMarkers() {
-  safetyDataMarkers.forEach(function (marker) {
-    marker.setMap(null);
-  });
+  safetyDataMarkers.forEach(
+    function (marker) {
+      marker.setMap(null);
+    },
+  );
 
   safetyDataMarkers = [];
 }
@@ -675,158 +950,253 @@ function addSafetyDataMarkers(
 ) {
   clearSafetyDataMarkers();
 
-  if (!safeRoute || !safeRoute.path || safeRoute.path.length < 2) {
+  if (
+    !safeRoute ||
+    !safeRoute.path ||
+    safeRoute.path.length < 2
+  ) {
     return;
   }
 
-  const routePath = convertPath(safeRoute.path);
+  const routePath =
+    convertPath(safeRoute.path);
 
-  const businessNames = [
-    "Open café",
-    "Late-night kiosk",
-    "Hotel reception",
-    "Open supermarket",
-    "Pharmacy emergency service",
-    "Open restaurant",
-    "24h convenience store",
-  ];
+  const businessNames =
+    currentAreaType === "rural"
+      ? [
+          "Village shop",
+          "Petrol station",
+          "Guesthouse reception",
+          "Local restaurant",
+          "Pharmacy on call",
+        ]
+      : [
+          "Open café",
+          "Late-night kiosk",
+          "Hotel reception",
+          "Open supermarket",
+          "Pharmacy emergency service",
+          "Open restaurant",
+          "24h convenience store",
+        ];
 
-  for (let i = 0; i < openBusinessCount; i++) {
-    const ratio = (i + 1) / (openBusinessCount + 1);
+  for (
+    let i = 0;
+    i < openBusinessCount;
+    i++
+  ) {
+    const ratio =
+      (i + 1) /
+      (openBusinessCount + 1);
 
-    const offset = i % 2 === 0 ? 0.00035 : -0.00035;
+    const offset =
+      i % 2 === 0
+        ? 0.00035
+        : -0.00035;
 
-    const markerPosition = offsetPointNearRoute(routePath, ratio, offset);
+    const markerPosition =
+      offsetPointNearRoute(
+        routePath,
+        ratio,
+        offset,
+      );
 
-    const title = businessNames[i % businessNames.length];
+    const title =
+      businessNames[
+        i % businessNames.length
+      ];
 
-    const marker = new google.maps.Marker({
-      map: map,
-      position: markerPosition,
-      title: title,
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        fillColor: "#fbbc04",
-        fillOpacity: 1,
-        strokeColor: "#ffffff",
-        strokeWeight: 3,
-        scale: 8,
+    const marker =
+      new google.maps.Marker({
+        map: map,
+        position: markerPosition,
+        title: title,
+        icon: {
+          path:
+            google.maps.SymbolPath.CIRCLE,
+          fillColor: "#fbbc04",
+          fillOpacity: 1,
+          strokeColor: "#ffffff",
+          strokeWeight: 3,
+          scale: 8,
+        },
+      });
+
+    const infoWindow =
+      new google.maps.InfoWindow({
+        content:
+          "<strong>" +
+          title +
+          "</strong><br>" +
+          "Currently open · Publicly accessible<br>" +
+          "Safety indicator for this route",
+      });
+
+    marker.addListener(
+      "click",
+      function () {
+        if (activeInfoWindow) {
+          activeInfoWindow.close();
+        }
+
+        activeInfoWindow = infoWindow;
+
+        infoWindow.open(
+          map,
+          marker,
+        );
       },
-    });
-
-    const infoWindow = new google.maps.InfoWindow({
-      content:
-        "<strong>" +
-        title +
-        "</strong><br>" +
-        "Currently open · Publicly accessible<br>" +
-        "Safety indicator for this route",
-    });
-
-    marker.addListener("click", function () {
-      if (activeInfoWindow) {
-        activeInfoWindow.close();
-      }
-
-      activeInfoWindow = infoWindow;
-      infoWindow.open(map, marker);
-    });
+    );
 
     safetyDataMarkers.push(marker);
   }
 
-  for (let i = 0; i < verifiedSafePointCount; i++) {
+  for (
+    let i = 0;
+    i < verifiedSafePointCount;
+    i++
+  ) {
     let markerPosition;
 
     if (i === 0 && safePoint) {
       markerPosition = safePoint;
     } else {
       const ratio =
-        (i + 1) / (verifiedSafePointCount + 1);
+        (i + 1) /
+        (verifiedSafePointCount + 1);
 
-      markerPosition = offsetPointNearRoute(
-        routePath,
-        ratio,
-        0.00055
-      );
+      markerPosition =
+        offsetPointNearRoute(
+          routePath,
+          ratio,
+          0.00055,
+        );
     }
 
-    const marker = new google.maps.Marker({
-      map: map,
-      position: markerPosition,
-      title: "Verified safe point",
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        fillColor: "#188038",
-        fillOpacity: 1,
-        strokeColor: "#ffffff",
-        strokeWeight: 3,
-        scale: 9,
+    const marker =
+      new google.maps.Marker({
+        map: map,
+        position: markerPosition,
+        title: "Verified safe point",
+        icon: {
+          path:
+            google.maps.SymbolPath.CIRCLE,
+          fillColor: "#188038",
+          fillOpacity: 1,
+          strokeColor: "#ffffff",
+          strokeWeight: 3,
+          scale: 9,
+        },
+      });
+
+    const infoWindow =
+      new google.maps.InfoWindow({
+        content:
+          "<strong>Verified safe point</strong><br>" +
+          "Verified location near Safe route<br>" +
+          "Suitable as a support point during the journey",
+      });
+
+    marker.addListener(
+      "click",
+      function () {
+        if (activeInfoWindow) {
+          activeInfoWindow.close();
+        }
+
+        activeInfoWindow = infoWindow;
+
+        infoWindow.open(
+          map,
+          marker,
+        );
       },
-    });
-
-    const infoWindow = new google.maps.InfoWindow({
-      content:
-        "<strong>Verified safe point</strong><br>" +
-        "Verified location near Safe route<br>" +
-        "Suitable as a support point during the journey",
-    });
-
-    marker.addListener("click", function () {
-      if (activeInfoWindow) {
-        activeInfoWindow.close();
-      }
-
-      activeInfoWindow = infoWindow;
-      infoWindow.open(map, marker);
-    });
+    );
 
     safetyDataMarkers.push(marker);
   }
 }
 
-function getPointAlongRoute(routePath, ratio) {
+function getPointAlongRoute(
+  routePath,
+  ratio,
+) {
   const index = Math.min(
     routePath.length - 1,
-    Math.max(0, Math.floor(routePath.length * ratio)),
+    Math.max(
+      0,
+      Math.floor(
+        routePath.length * ratio,
+      ),
+    ),
   );
 
   return routePath[index];
 }
 
-function offsetPointNearRoute(routePath, ratio, offsetDistance) {
+function offsetPointNearRoute(
+  routePath,
+  ratio,
+  offsetDistance,
+) {
   const index = Math.min(
     routePath.length - 2,
-    Math.max(1, Math.floor(routePath.length * ratio)),
+    Math.max(
+      1,
+      Math.floor(
+        routePath.length * ratio,
+      ),
+    ),
   );
 
-  const previousPoint = routePath[index - 1];
-  const currentPoint = routePath[index];
-  const nextPoint = routePath[index + 1];
+  const previousPoint =
+    routePath[index - 1];
 
-  const directionLat = nextPoint.lat - previousPoint.lat;
+  const currentPoint =
+    routePath[index];
 
-  const directionLng = nextPoint.lng - previousPoint.lng;
+  const nextPoint =
+    routePath[index + 1];
+
+  const directionLat =
+    nextPoint.lat - previousPoint.lat;
+
+  const directionLng =
+    nextPoint.lng - previousPoint.lng;
 
   const length = Math.sqrt(
-    directionLat * directionLat + directionLng * directionLng,
+    directionLat * directionLat +
+      directionLng * directionLng,
   );
 
   if (length === 0) {
     return {
-      lat: currentPoint.lat + offsetDistance,
-      lng: currentPoint.lng + offsetDistance,
+      lat:
+        currentPoint.lat +
+        offsetDistance,
+
+      lng:
+        currentPoint.lng +
+        offsetDistance,
     };
   }
 
-  const perpendicularLat = -directionLng / length;
+  const perpendicularLat =
+    -directionLng / length;
 
-  const perpendicularLng = directionLat / length;
+  const perpendicularLng =
+    directionLat / length;
 
   return {
-    lat: currentPoint.lat + perpendicularLat * offsetDistance,
+    lat:
+      currentPoint.lat +
+      perpendicularLat *
+        offsetDistance,
 
-    lng: currentPoint.lng + perpendicularLng * offsetDistance,
+    lng:
+      currentPoint.lng +
+      perpendicularLng *
+        offsetDistance,
   };
 }
 
@@ -841,20 +1211,31 @@ async function showSafeRoute() {
     if (!safeRouteLoaded) {
       setStatus("Calculating Safe route...");
 
-      const startAddress = document.getElementById("startInput").value.trim();
+      const startAddress =
+        document
+          .getElementById("startInput")
+          .value
+          .trim();
 
-      const destinationAddress = document
-        .getElementById("destinationInput")
-        .value.trim();
+      const destinationAddress =
+        document
+          .getElementById(
+            "destinationInput",
+          )
+          .value
+          .trim();
 
-      const safeRouteResult = await findSafeRouteWithinLimit(
-        startAddress,
-        destinationAddress,
-      );
+      const safeRouteResult =
+        await findSafeRouteWithinLimit(
+          startAddress,
+          destinationAddress,
+        );
 
-      safeRoute = safeRouteResult.route;
+      safeRoute =
+        safeRouteResult.route;
 
-      const safePoint = safeRouteResult.safePoint;
+      const safePoint =
+        safeRouteResult.safePoint;
 
       safeRoutePoint = safePoint;
 
@@ -862,7 +1243,10 @@ async function showSafeRoute() {
 
       drawSafeRoute();
 
-      currentSafetyProfile = generateSafetyProfile(safeRoute.distanceMeters);
+      currentSafetyProfile =
+        generateSafetyProfile(
+          safeRoute.distanceMeters,
+        );
 
       addSafetyDataMarkers(
         safePoint,
@@ -871,7 +1255,10 @@ async function showSafeRoute() {
       );
 
       updateSafeSummary();
-      updateSafetyIndicators(currentSafetyProfile);
+
+      updateSafetyIndicators(
+        currentSafetyProfile,
+      );
     } else if (safeRouteLine) {
       safeRouteLine.setMap(map);
 
@@ -882,7 +1269,9 @@ async function showSafeRoute() {
           currentSafetyProfile.verifiedSafePoints,
         );
 
-        updateSafetyIndicators(currentSafetyProfile);
+        updateSafetyIndicators(
+          currentSafetyProfile,
+        );
       }
     }
 
@@ -896,18 +1285,28 @@ async function showSafeRoute() {
     showElement(safeDetails);
     hideElement(featureInfo);
 
-    document.getElementById("startJourneyButton").textContent =
+    document
+      .getElementById(
+        "startJourneyButton",
+      )
+      .textContent =
       "Start Safe journey";
 
     if (safeRoute.viewport) {
-      map.fitBounds(safeRoute.viewport, 70);
+      map.fitBounds(
+        safeRoute.viewport,
+        70,
+      );
     }
 
     setStatus("Safe route selected.");
   } catch (error) {
     console.error(error);
 
-    setStatus(error.message || "The Safe route could not be loaded.");
+    setStatus(
+      error.message ||
+      "The Safe route could not be loaded.",
+    );
   }
 }
 
@@ -931,51 +1330,97 @@ function showNormalRoute() {
   updateSelectedButtons();
   hideElement(safeDetails);
 
-  document.getElementById("startJourneyButton").textContent = "Start";
+  document
+    .getElementById(
+      "startJourneyButton",
+    )
+    .textContent = "Start";
 
   if (normalRoute.viewport) {
-    map.fitBounds(normalRoute.viewport, 70);
+    map.fitBounds(
+      normalRoute.viewport,
+      70,
+    );
   }
 
-  setStatus("Normal walking route selected.");
+  setStatus(
+    "Normal walking route selected.",
+  );
 }
 
 function updateSelectedButtons() {
   document
-    .getElementById("normalRouteButton")
-    .classList.toggle("active", selectedMode === "normal");
+    .getElementById(
+      "normalRouteButton",
+    )
+    .classList.toggle(
+      "active",
+      selectedMode === "normal",
+    );
 
   document
-    .getElementById("safeRouteButton")
-    .classList.toggle("active", selectedMode === "safe");
+    .getElementById(
+      "safeRouteButton",
+    )
+    .classList.toggle(
+      "active",
+      selectedMode === "safe",
+    );
 }
 
 function updateNormalSummary() {
-  document.getElementById("normalRouteSummary").textContent =
-    formatDuration(normalRoute.durationMillis) +
+  document
+    .getElementById(
+      "normalRouteSummary",
+    )
+    .textContent =
+    formatDuration(
+      normalRoute.durationMillis,
+    ) +
     " | " +
-    formatDistance(normalRoute.distanceMeters);
+    formatDistance(
+      normalRoute.distanceMeters,
+    );
 }
 
 function updateSafeSummary() {
-  document.getElementById("safeRouteSummary").textContent =
-    formatDuration(safeRoute.durationMillis) +
+  document
+    .getElementById(
+      "safeRouteSummary",
+    )
+    .textContent =
+    formatDuration(
+      safeRoute.durationMillis,
+    ) +
     " | " +
-    formatDistance(safeRoute.distanceMeters);
+    formatDistance(
+      safeRoute.distanceMeters,
+    );
 }
 
 function formatDuration(durationMillis) {
-  const minutes = Math.max(1, Math.round(durationMillis / 60000));
+  const minutes = Math.max(
+    1,
+    Math.round(
+      durationMillis / 60000,
+    ),
+  );
 
   return minutes + " min";
 }
 
 function formatDistance(distanceMeters) {
   if (distanceMeters < 1000) {
-    return Math.round(distanceMeters) + " m";
+    return (
+      Math.round(distanceMeters) +
+      " m"
+    );
   }
 
-  return (distanceMeters / 1000).toFixed(1) + " km";
+  return (
+    (distanceMeters / 1000).toFixed(1) +
+    " km"
+  );
 }
 
 /* ==========================================================================
@@ -1003,13 +1448,27 @@ function startJourney() {
   hideElement(routeCard);
   showElement(journeyCard);
 
-  const journeyModeLabel = document.getElementById("journeyModeLabel");
-  const journeyTitle = document.getElementById("journeyTitle");
-  const journeyStatus = document.getElementById("journeyStatus");
+  const journeyModeLabel =
+    document.getElementById(
+      "journeyModeLabel",
+    );
+
+  const journeyTitle =
+    document.getElementById(
+      "journeyTitle",
+    );
+
+  const journeyStatus =
+    document.getElementById(
+      "journeyStatus",
+    );
 
   if (selectedMode === "safe") {
-    journeyModeLabel.textContent = "SAFE JOURNEY";
-    journeyTitle.textContent = "Safe navigation active";
+    journeyModeLabel.textContent =
+      "SAFE JOURNEY";
+
+    journeyTitle.textContent =
+      "Safe navigation active";
 
     setSafeJourneyStatus(
       safetySettings.checkIn
@@ -1024,25 +1483,40 @@ function startJourney() {
     }
 
     hideElement(taxiModeCard);
+
     clearSafetyTimers();
 
     if (safetySettings.checkIn) {
-      monitoringTimer = setTimeout(function () {
-        setSafeJourneyStatus(
-          "Monitoring active. No unusual movement detected.",
-        );
-      }, MONITORING_STATUS_DELAY_MS);
+      monitoringTimer = setTimeout(
+        function () {
+          setSafeJourneyStatus(
+            "Monitoring active. No unusual movement detected.",
+          );
+        },
+        MONITORING_STATUS_DELAY_MS,
+      );
 
-      checkInTimer = setTimeout(function () {
-        setSafeJourneyStatus("You have been stationary for several minutes.");
-        openCheckIn();
-      }, CHECK_IN_TRIGGER_DELAY_MS);
+      checkInTimer = setTimeout(
+        function () {
+          setSafeJourneyStatus(
+            "You have been stationary for several minutes.",
+          );
+
+          openCheckIn();
+        },
+        CHECK_IN_TRIGGER_DELAY_MS,
+      );
     }
   } else {
-    journeyModeLabel.textContent = "WALKING";
-    journeyTitle.textContent = "Navigation active";
+    journeyModeLabel.textContent =
+      "WALKING";
+
+    journeyTitle.textContent =
+      "Navigation active";
+
     journeyStatus.innerHTML =
       '<p class="journey-note">Follow the highlighted route.</p>';
+
     hideElement(taxiOptionCard);
     hideElement(taxiModeCard);
   }
@@ -1050,14 +1524,18 @@ function startJourney() {
 
 function closeJourney() {
   clearSafetyTimers();
+
   hideElement(checkInOverlay);
   hideElement(supportOverlay);
   hideElement(journeyCard);
+
   showElement(routeCard);
 }
 
 function openCheckIn() {
-  document.getElementById("checkInText").textContent =
+  document
+    .getElementById("checkInText")
+    .textContent =
     "You have remained in the same location for " +
     safetySettings.stationaryMinutes +
     " minutes. Please confirm your status.";
@@ -1068,37 +1546,42 @@ function openCheckIn() {
     clearTimeout(checkInResponseTimer);
   }
 
-  // Erst bei ausbleibender Reaktion wird automatisch Unterstützung informiert.
   checkInResponseTimer = setTimeout(
     handleUnansweredCheckIn,
     CHECK_IN_RESPONSE_TIMEOUT_MS,
   );
 }
 
-
 function confirmSafe() {
   clearCheckInResponseTimer();
+
   hideElement(checkInOverlay);
 
   setSafeJourneyStatus(
-    "Safety confirmed. Navigation continues."
+    "Safety confirmed. Navigation continues.",
   );
 
-  document.getElementById("progressBar").style.width = "62%";
+  document
+    .getElementById("progressBar")
+    .style.width = "62%";
 }
 
 function requestLocalHelp() {
   clearCheckInResponseTimer();
+
   hideElement(checkInOverlay);
 
   showSupportResult(
     "Support alerted",
-    buildSupportNotificationText("You requested help."),
+    buildSupportNotificationText(
+      "You requested help.",
+    ),
   );
 }
 
 function handleUnansweredCheckIn() {
   checkInResponseTimer = null;
+
   hideElement(checkInOverlay);
 
   let alertMessage =
@@ -1117,21 +1600,27 @@ function handleUnansweredCheckIn() {
 
   showSupportResult(
     "No response received",
-    buildSupportNotificationText(alertMessage),
+    buildSupportNotificationText(
+      alertMessage,
+    ),
   );
 }
 
 function clearCheckInResponseTimer() {
   if (checkInResponseTimer) {
-    clearTimeout(checkInResponseTimer);
+    clearTimeout(
+      checkInResponseTimer,
+    );
+
     checkInResponseTimer = null;
   }
 }
 
-function buildSupportNotificationText(prefix) {
+function buildSupportNotificationText(
+  prefix,
+) {
   const messages = [prefix];
 
-  // Alle gespeicherten Kontakte werden genannt, nicht nur der erste.
   if (
     safetySettings.emergencyContact &&
     safetySettings.contacts &&
@@ -1139,8 +1628,8 @@ function buildSupportNotificationText(prefix) {
   ) {
     messages.push(
       "Emergency contacts notified: " +
-        safetySettings.contacts.join(", ") +
-        ".",
+      safetySettings.contacts.join(", ") +
+      ".",
     );
   }
 
@@ -1151,33 +1640,44 @@ function buildSupportNotificationText(prefix) {
   }
 
   if (messages.length === 1) {
-    messages.push("No support channel is currently enabled in Settings.");
+    messages.push(
+      "No support channel is currently enabled in Settings.",
+    );
   }
 
   return messages.join(" ");
 }
 
-function showSupportResult(title, text) {
-  document.getElementById("supportTitle").textContent =
-    title;
+function showSupportResult(
+  title,
+  text,
+) {
+  document
+    .getElementById("supportTitle")
+    .textContent = title;
 
-  document.getElementById("supportText").textContent =
-    text;
+  document
+    .getElementById("supportText")
+    .textContent = text;
 
   if (title === "No response received") {
     supportIcon.textContent = "!";
     supportIcon.classList.add("warning");
   } else {
     supportIcon.textContent = "✓";
-    supportIcon.classList.remove("warning");
+    supportIcon.classList.remove(
+      "warning",
+    );
   }
 
   setSafeJourneyStatus(
-    "Support flow is active."
+    "Support flow is active.",
   );
 
   const escalateButton =
-    document.getElementById("escalateButton");
+    document.getElementById(
+      "escalateButton",
+    );
 
   if (safetySettings.localSupport) {
     showElement(escalateButton);
@@ -1188,22 +1688,32 @@ function showSupportResult(title, text) {
   showElement(supportOverlay);
 }
 
-
 function confirmEmergencyEscalation() {
   supportIcon.textContent = "✓";
-  supportIcon.classList.remove("warning");
 
-  document.getElementById("supportTitle").textContent =
+  supportIcon.classList.remove(
+    "warning",
+  );
+
+  document
+    .getElementById("supportTitle")
+    .textContent =
     "Emergency services notified";
 
-  document.getElementById("supportText").textContent =
+  document
+    .getElementById("supportText")
+    .textContent =
     "Emergency services have been notified and received your current location and Safe Journey status.";
 
   setSafeJourneyStatus(
-    "Emergency escalation is active."
+    "Emergency escalation is active.",
   );
 
-  hideElement(document.getElementById("escalateButton"));
+  hideElement(
+    document.getElementById(
+      "escalateButton",
+    ),
+  );
 
   setTimeout(function () {
     hideElement(supportOverlay);
@@ -1230,48 +1740,57 @@ function playAttentionSignal() {
     const alarmPattern = [
       0,
       0.28,
-      0.56
+      0.56,
     ];
 
-    alarmPattern.forEach(function (startTime) {
-      const oscillator =
-        audioContext.createOscillator();
+    alarmPattern.forEach(
+      function (startTime) {
+        const oscillator =
+          audioContext.createOscillator();
 
-      const gain =
-        audioContext.createGain();
+        const gain =
+          audioContext.createGain();
 
-      oscillator.type = "square";
-      oscillator.frequency.value = 950;
+        oscillator.type = "square";
 
-      gain.gain.setValueAtTime(
-        0.16,
-        audioContext.currentTime + startTime
-      );
+        oscillator.frequency.value =
+          950;
 
-      gain.gain.exponentialRampToValueAtTime(
-        0.01,
-        audioContext.currentTime +
-          startTime +
-          0.18
-      );
+        gain.gain.setValueAtTime(
+          0.16,
+          audioContext.currentTime +
+            startTime,
+        );
 
-      oscillator.connect(gain);
-      gain.connect(audioContext.destination);
+        gain.gain.exponentialRampToValueAtTime(
+          0.01,
+          audioContext.currentTime +
+            startTime +
+            0.18,
+        );
 
-      oscillator.start(
-        audioContext.currentTime + startTime
-      );
+        oscillator.connect(gain);
 
-      oscillator.stop(
-        audioContext.currentTime +
-          startTime +
-          0.18
-      );
-    });
+        gain.connect(
+          audioContext.destination,
+        );
+
+        oscillator.start(
+          audioContext.currentTime +
+            startTime,
+        );
+
+        oscillator.stop(
+          audioContext.currentTime +
+            startTime +
+            0.18,
+        );
+      },
+    );
   } catch (error) {
     console.warn(
       "Attention signal could not be played.",
-      error
+      error,
     );
   }
 }
@@ -1282,58 +1801,122 @@ function playAttentionSignal() {
 
 function setupGeoapifyAutocomplete() {
   setupAutocompleteForInput("startInput");
-  setupAutocompleteForInput("destinationInput");
+  setupAutocompleteForInput(
+    "destinationInput",
+  );
 }
 
-function setupAutocompleteForInput(inputId) {
-  const input = document.getElementById(inputId);
+function setupAutocompleteForInput(
+  inputId,
+) {
+  const input =
+    document.getElementById(inputId);
 
-  const suggestionBox = document.createElement("div");
-  suggestionBox.className = "suggestion-box hidden";
+  const suggestionBox =
+    document.createElement("div");
 
-  document.body.appendChild(suggestionBox);
+  suggestionBox.className =
+    "suggestion-box hidden";
+
+  document.body.appendChild(
+    suggestionBox,
+  );
 
   let debounceTimer = null;
 
-  input.addEventListener("input", function () {
-    positionSuggestionBox(input, suggestionBox);
-    const query = input.value.trim();
+  input.addEventListener(
+    "input",
+    function () {
+      positionSuggestionBox(
+        input,
+        suggestionBox,
+      );
 
-    clearTimeout(debounceTimer);
+      const query =
+        input.value.trim();
 
-    if (query.length < 3) {
-      hideAutocompleteSuggestions(suggestionBox);
-      return;
-    }
+      clearTimeout(debounceTimer);
 
-    debounceTimer = setTimeout(function () {
-      loadGeoapifySuggestions(query, suggestionBox, input);
-    }, 300);
-  });
+      if (query.length < 3) {
+        hideAutocompleteSuggestions(
+          suggestionBox,
+        );
 
-  input.addEventListener("focus", function () {
-    positionSuggestionBox(input, suggestionBox);
-    if (input.value.trim().length >= 3) {
-      loadGeoapifySuggestions(input.value.trim(), suggestionBox, input);
-    }
-  });
+        return;
+      }
 
-  document.addEventListener("click", function (event) {
-    if (event.target !== input && !suggestionBox.contains(event.target)) {
-      hideAutocompleteSuggestions(suggestionBox);
-    }
-  });
+      debounceTimer = setTimeout(
+        function () {
+          loadGeoapifySuggestions(
+            query,
+            suggestionBox,
+            input,
+          );
+        },
+        300,
+      );
+    },
+  );
+
+  input.addEventListener(
+    "focus",
+    function () {
+      positionSuggestionBox(
+        input,
+        suggestionBox,
+      );
+
+      if (
+        input.value.trim().length >= 3
+      ) {
+        loadGeoapifySuggestions(
+          input.value.trim(),
+          suggestionBox,
+          input,
+        );
+      }
+    },
+  );
+
+  document.addEventListener(
+    "click",
+    function (event) {
+      if (
+        event.target !== input &&
+        !suggestionBox.contains(
+          event.target,
+        )
+      ) {
+        hideAutocompleteSuggestions(
+          suggestionBox,
+        );
+      }
+    },
+  );
 }
 
-function positionSuggestionBox(input, suggestionBox) {
-  const rect = input.getBoundingClientRect();
+function positionSuggestionBox(
+  input,
+  suggestionBox,
+) {
+  const rect =
+    input.getBoundingClientRect();
 
-  suggestionBox.style.left = rect.left + "px";
-  suggestionBox.style.top = rect.bottom + "px";
-  suggestionBox.style.width = rect.width + "px";
+  suggestionBox.style.left =
+    rect.left + "px";
+
+  suggestionBox.style.top =
+    rect.bottom + "px";
+
+  suggestionBox.style.width =
+    rect.width + "px";
 }
 
-async function loadGeoapifySuggestions(query, suggestionBox, input) {
+async function loadGeoapifySuggestions(
+  query,
+  suggestionBox,
+  input,
+) {
   try {
     const url =
       "https://api.geoapify.com/v1/geocode/autocomplete" +
@@ -1344,52 +1927,97 @@ async function loadGeoapifySuggestions(query, suggestionBox, input) {
       "&limit=5" +
       "&format=json" +
       "&apiKey=" +
-      encodeURIComponent(GEOAPIFY_API_KEY);
+      encodeURIComponent(
+        GEOAPIFY_API_KEY,
+      );
 
     const response = await fetch(url);
 
     if (!response.ok) {
-      throw new Error("Autocomplete request failed.");
+      throw new Error(
+        "Autocomplete request failed.",
+      );
     }
 
     const data = await response.json();
 
     suggestionBox.innerHTML = "";
 
-    if (!data.results || data.results.length === 0) {
-      hideAutocompleteSuggestions(suggestionBox);
+    if (
+      !data.results ||
+      data.results.length === 0
+    ) {
+      hideAutocompleteSuggestions(
+        suggestionBox,
+      );
+
       return;
     }
 
-    data.results.forEach(function (place) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "suggestion-item";
+    data.results.forEach(
+      function (place) {
+        const item =
+          document.createElement("button");
 
-      item.textContent = place.formatted || place.address_line1 || place.name;
+        item.type = "button";
 
-      item.addEventListener("click", function () {
-        input.value = item.textContent;
-        hideAutocompleteSuggestions(suggestionBox);
-      });
+        item.className =
+          "suggestion-item";
 
-      suggestionBox.appendChild(item);
-    });
+        item.textContent =
+          place.formatted ||
+          place.address_line1 ||
+          place.name;
 
-    positionSuggestionBox(input, suggestionBox);
-    showAutocompleteSuggestions(suggestionBox);
+        item.addEventListener(
+          "click",
+          function () {
+            input.value =
+              item.textContent;
+
+            hideAutocompleteSuggestions(
+              suggestionBox,
+            );
+          },
+        );
+
+        suggestionBox.appendChild(
+          item,
+        );
+      },
+    );
+
+    positionSuggestionBox(
+      input,
+      suggestionBox,
+    );
+
+    showAutocompleteSuggestions(
+      suggestionBox,
+    );
   } catch (error) {
     console.error(error);
-    hideAutocompleteSuggestions(suggestionBox);
+
+    hideAutocompleteSuggestions(
+      suggestionBox,
+    );
   }
 }
 
-function showAutocompleteSuggestions(suggestionBox) {
-  suggestionBox.classList.remove("hidden");
+function showAutocompleteSuggestions(
+  suggestionBox,
+) {
+  suggestionBox.classList.remove(
+    "hidden",
+  );
 }
 
-function hideAutocompleteSuggestions(suggestionBox) {
-  suggestionBox.classList.add("hidden");
+function hideAutocompleteSuggestions(
+  suggestionBox,
+) {
+  suggestionBox.classList.add(
+    "hidden",
+  );
 }
 
 /* ==========================================================================
@@ -1397,9 +2025,11 @@ function hideAutocompleteSuggestions(suggestionBox) {
    ========================================================================== */
 
 function clearTaxiMarkers() {
-  taxiMarkers.forEach(function (marker) {
-    marker.setMap(null);
-  });
+  taxiMarkers.forEach(
+    function (marker) {
+      marker.setMap(null);
+    },
+  );
 
   taxiMarkers = [];
 }
@@ -1407,6 +2037,7 @@ function clearTaxiMarkers() {
 function clearTaxiRoute() {
   if (taxiRouteLine) {
     taxiRouteLine.setMap(null);
+
     taxiRouteLine = null;
   }
 }
@@ -1414,36 +2045,49 @@ function clearTaxiRoute() {
 function clearCurrentPositionMarker() {
   if (currentPositionMarker) {
     currentPositionMarker.setMap(null);
+
     currentPositionMarker = null;
   }
 }
 
 function getSimulatedCurrentPosition() {
-  if (!safeRoute || !safeRoute.path || safeRoute.path.length < 2) {
+  if (
+    !safeRoute ||
+    !safeRoute.path ||
+    safeRoute.path.length < 2
+  ) {
     return null;
   }
 
-  const routePath = convertPath(safeRoute.path);
+  const routePath =
+    convertPath(safeRoute.path);
 
-  return getPointAlongRoute(routePath, 0.35);
+  return getPointAlongRoute(
+    routePath,
+    0.35,
+  );
 }
 
-function showCurrentPositionMarker(position) {
+function showCurrentPositionMarker(
+  position,
+) {
   clearCurrentPositionMarker();
 
-  currentPositionMarker = new google.maps.Marker({
-    map: map,
-    position: position,
-    title: "Current position",
-    icon: {
-      path: google.maps.SymbolPath.CIRCLE,
-      fillColor: "#34a853",
-      fillOpacity: 1,
-      strokeColor: "#b7f0c0",
-      strokeWeight: 6,
-      scale: 8,
-    },
-  });
+  currentPositionMarker =
+    new google.maps.Marker({
+      map: map,
+      position: position,
+      title: "Current position",
+      icon: {
+        path:
+          google.maps.SymbolPath.CIRCLE,
+        fillColor: "#34a853",
+        fillOpacity: 1,
+        strokeColor: "#b7f0c0",
+        strokeWeight: 6,
+        scale: 8,
+      },
+    });
 }
 
 async function showTaxiOptions() {
@@ -1455,35 +2099,54 @@ async function showTaxiOptions() {
   clearTaxiRoute();
   clearSafetyDataMarkers();
 
-  simulatedCurrentPosition = getSimulatedCurrentPosition();
+  simulatedCurrentPosition =
+    getSimulatedCurrentPosition();
 
   if (!simulatedCurrentPosition) {
     return;
   }
 
-  showCurrentPositionMarker(simulatedCurrentPosition);
+  showCurrentPositionMarker(
+    simulatedCurrentPosition,
+  );
 
   await createTaxiPickupMarkers();
 
+  if (taxiPickupOptions.length === 0) {
+    hideElement(taxiModeCard);
+
+    showElement(taxiOptionCard);
+
+    setSafeJourneyStatus(
+      "No nearby taxi pickup options are available for this route.",
+    );
+
+    return;
+  }
+
   hideElement(taxiOptionCard);
+
   showElement(taxiModeCard);
 
-  setSafeJourneyStatus("Taxi pickup options are shown near the route.");
+  setSafeJourneyStatus(
+    "Taxi pickup options are shown near the route.",
+  );
 }
 
 function generateNearbyTaxiPoint(
-  currentPosition
+  currentPosition,
 ) {
   const minimumDistanceMeters = 120;
+
   const maximumDistanceMeters = 850;
 
   const distanceMeters =
     minimumDistanceMeters +
     Math.random() *
-    (
-      maximumDistanceMeters -
-      minimumDistanceMeters
-    );
+      (
+        maximumDistanceMeters -
+        minimumDistanceMeters
+      );
 
   const angle =
     Math.random() * Math.PI * 2;
@@ -1492,7 +2155,8 @@ function generateNearbyTaxiPoint(
     (
       distanceMeters *
       Math.cos(angle)
-    ) / 111320;
+    ) /
+    111320;
 
   const longitudeOffset =
     (
@@ -1503,8 +2167,8 @@ function generateNearbyTaxiPoint(
       111320 *
       Math.cos(
         currentPosition.lat *
-        Math.PI /
-        180
+          Math.PI /
+          180,
       )
     );
 
@@ -1515,7 +2179,7 @@ function generateNearbyTaxiPoint(
 
     lng:
       currentPosition.lng +
-      longitudeOffset
+      longitudeOffset,
   };
 }
 
@@ -1528,27 +2192,33 @@ async function createTaxiPickupMarkers() {
     "Taxi pickup point",
     "Taxi stand",
     "Hotel pickup point",
-    "Public pickup point"
+    "Public pickup point",
   ];
 
   if (taxiPickupOptions.length === 0) {
     const numberOfPickups =
-      getRandomNumber(1, 4);
+      currentAreaType === "rural"
+        ? Math.random() < 0.3
+          ? 1
+          : 0
+        : getRandomNumber(1, 4);
 
     const validPickups = [];
 
     let attempts = 0;
+
     const maxAttempts = 30;
 
     while (
-      validPickups.length < numberOfPickups &&
+      validPickups.length <
+        numberOfPickups &&
       attempts < maxAttempts
     ) {
       attempts++;
 
       const position =
         generateNearbyTaxiPoint(
-          simulatedCurrentPosition
+          simulatedCurrentPosition,
         );
 
       try {
@@ -1556,15 +2226,16 @@ async function createTaxiPickupMarkers() {
           await computeRoute(
             simulatedCurrentPosition,
             position,
-            null
+            null,
           );
 
         const walkingMinutes =
           Math.max(
             1,
             Math.round(
-              walkingRoute.durationMillis / 60000
-            )
+              walkingRoute.durationMillis /
+                60000,
+            ),
           );
 
         if (walkingMinutes > 12) {
@@ -1575,92 +2246,110 @@ async function createTaxiPickupMarkers() {
           title:
             pickupTitles[
               validPickups.length %
-              pickupTitles.length
+                pickupTitles.length
             ],
           position: position,
-          walkingMinutes: walkingMinutes
+          walkingMinutes:
+            walkingMinutes,
         });
       } catch (error) {
         console.error(
           "Taxi pickup candidate skipped.",
-          error
+          error,
         );
       }
     }
 
-    validPickups.sort(function (a, b) {
-      return (
-        a.walkingMinutes -
-        b.walkingMinutes
-      );
-    });
+    validPickups.sort(
+      function (a, b) {
+        return (
+          a.walkingMinutes -
+          b.walkingMinutes
+        );
+      },
+    );
 
-    taxiPickupOptions = validPickups;
+    taxiPickupOptions =
+      validPickups;
   }
 
-  taxiPickupOptions.forEach(function (option) {
-    const marker =
-      new google.maps.Marker({
-        map: map,
-        position: option.position,
-        title: option.title,
-        label: {
-          text: "T",
-          color: "#202124",
-          fontWeight: "bold"
+  taxiPickupOptions.forEach(
+    function (option) {
+      const marker =
+        new google.maps.Marker({
+          map: map,
+          position: option.position,
+          title: option.title,
+          label: {
+            text: "T",
+            color: "#202124",
+            fontWeight: "bold",
+          },
+          icon: {
+            path:
+              "M -10 -10 L 10 -10 L 10 10 L -10 10 Z",
+            fillColor: "#ffea00",
+            fillOpacity: 1,
+            strokeColor: "#202124",
+            strokeWeight: 2,
+            scale: 1,
+          },
+        });
+
+      const infoWindow =
+        new google.maps.InfoWindow({
+          content:
+            "<strong>" +
+            option.title +
+            "</strong><br>" +
+            "Approx. " +
+            option.walkingMinutes +
+            " min walk<br>" +
+            "<button class='map-popup-button' onclick='selectTaxiPickup(" +
+            JSON.stringify(
+              option.position.lat,
+            ) +
+            "," +
+            JSON.stringify(
+              option.position.lng,
+            ) +
+            ")'>Choose this pickup</button>",
+        });
+
+      marker.addListener(
+        "click",
+        function () {
+          if (activeInfoWindow) {
+            activeInfoWindow.close();
+          }
+
+          activeInfoWindow =
+            infoWindow;
+
+          infoWindow.open(
+            map,
+            marker,
+          );
         },
-        icon: {
-          path:
-            "M -10 -10 L 10 -10 L 10 10 L -10 10 Z",
-          fillColor: "#ffea00",
-          fillOpacity: 1,
-          strokeColor: "#202124",
-          strokeWeight: 2,
-          scale: 1
-        }
-      });
+      );
 
-    const infoWindow =
-      new google.maps.InfoWindow({
-        content:
-          "<strong>" +
-          option.title +
-          "</strong><br>" +
-          "Approx. " +
-          option.walkingMinutes +
-          " min walk<br>" +
-          "<button class='map-popup-button' onclick='selectTaxiPickup(" +
-          JSON.stringify(
-            option.position.lat
-          ) +
-          "," +
-          JSON.stringify(
-            option.position.lng
-          ) +
-          ")'>Choose this pickup</button>"
-      });
-
-    marker.addListener("click", function () {
-      if (activeInfoWindow) {
-        activeInfoWindow.close();
-      }
-
-      activeInfoWindow = infoWindow;
-      infoWindow.open(map, marker);
-    });
-
-    taxiMarkers.push(marker);
-  });
+      taxiMarkers.push(marker);
+    },
+  );
 }
 
-async function selectTaxiPickup(lat, lng) {
+async function selectTaxiPickup(
+  lat,
+  lng,
+) {
   const taxiPoint = {
     lat: lat,
     lng: lng,
   };
 
   if (!simulatedCurrentPosition) {
-    simulatedCurrentPosition = getSimulatedCurrentPosition();
+    simulatedCurrentPosition =
+      getSimulatedCurrentPosition();
   }
 
   if (!simulatedCurrentPosition) {
@@ -1678,35 +2367,46 @@ async function selectTaxiPickup(lat, lng) {
       normalRouteLine.setMap(null);
     }
 
-    const taxiRoute = await computeRoute(
-      simulatedCurrentPosition,
-      taxiPoint,
-      null,
-    );
+    const taxiRoute =
+      await computeRoute(
+        simulatedCurrentPosition,
+        taxiPoint,
+        null,
+      );
 
-    taxiRouteLine = new google.maps.Polyline({
-      map: map,
-      path: convertPath(taxiRoute.path),
-      strokeColor: "#f29900",
-      strokeOpacity: 1,
-      strokeWeight: 7,
-      zIndex: 5,
-    });
+    taxiRouteLine =
+      new google.maps.Polyline({
+        map: map,
+        path:
+          convertPath(
+            taxiRoute.path,
+          ),
+        strokeColor: "#f29900",
+        strokeOpacity: 1,
+        strokeWeight: 7,
+        zIndex: 5,
+      });
 
     if (taxiRoute.viewport) {
-      map.fitBounds(taxiRoute.viewport, 70);
+      map.fitBounds(
+        taxiRoute.viewport,
+        70,
+      );
     }
 
-    setSafeJourneyStatus("Route updated to the selected taxi pickup point.");
+    setSafeJourneyStatus(
+      "Route updated to the selected taxi pickup point.",
+    );
   } catch (error) {
     console.error(error);
 
-    setSafeJourneyStatus("Taxi pickup route could not be calculated.");
+    setSafeJourneyStatus(
+      "Taxi pickup route could not be calculated.",
+    );
   }
 }
 
 function returnToSafeRoute() {
-
   clearTaxiMarkers();
   clearTaxiRoute();
   clearCurrentPositionMarker();
@@ -1724,12 +2424,18 @@ function returnToSafeRoute() {
   }
 
   showElement(taxiOptionCard);
+
   hideElement(taxiModeCard);
 
-  setSafeJourneyStatus("Back on Safe route. Monitoring remains active.");
+  setSafeJourneyStatus(
+    "Back on Safe route. Monitoring remains active.",
+  );
 
   if (safeRoute.viewport) {
-    map.fitBounds(safeRoute.viewport, 70);
+    map.fitBounds(
+      safeRoute.viewport,
+      70,
+    );
   }
 }
 
@@ -1740,7 +2446,9 @@ function returnToSafeRoute() {
 function openFromLateNightNotification() {
   hideElement(lockScreen);
 
-  document.getElementById("startInput").focus();
+  document
+    .getElementById("startInput")
+    .focus();
 }
 
 /* ==========================================================================
@@ -1748,39 +2456,76 @@ function openFromLateNightNotification() {
    ========================================================================== */
 
 function loadSafetySettings() {
-  const savedSettings = localStorage.getItem("safetySettings");
+  const savedSettings =
+    localStorage.getItem(
+      "safetySettings",
+    );
 
   if (savedSettings) {
     let parsedSettings;
 
     try {
-      parsedSettings = JSON.parse(savedSettings);
+      parsedSettings =
+        JSON.parse(savedSettings);
     } catch (error) {
-      console.warn("Saved safety settings could not be read.", error);
-      localStorage.removeItem("safetySettings");
+      console.warn(
+        "Saved safety settings could not be read.",
+        error,
+      );
+
+      localStorage.removeItem(
+        "safetySettings",
+      );
+
       parsedSettings = {};
     }
 
-    // Bestehende Browserdaten aus älteren Prototype-Versionen weiterverwenden.
     if (
-      parsedSettings.localSupport === undefined &&
-      parsedSettings.sosSupport !== undefined
+      parsedSettings.localSupport ===
+        undefined &&
+      parsedSettings.sosSupport !==
+        undefined
     ) {
-      parsedSettings.localSupport = parsedSettings.sosSupport;
+      parsedSettings.localSupport =
+        parsedSettings.sosSupport;
+
       delete parsedSettings.sosSupport;
     }
 
     return {
-      emergencyContact: parsedSettings.emergencyContact ?? true,
-      checkIn: parsedSettings.checkIn ?? true,
-      stationaryMinutes: parsedSettings.stationaryMinutes ?? 5,
-      audibleAlert: parsedSettings.audibleAlert ?? true,
-      responseMinutes: parsedSettings.responseMinutes ?? 1,
-      localSupport: parsedSettings.localSupport ?? true,
-      taxiPickup: parsedSettings.taxiPickup ?? true,
-      contacts: Array.isArray(parsedSettings.contacts)
-        ? parsedSettings.contacts
-        : ["Anna"],
+      emergencyContact:
+        parsedSettings.emergencyContact ??
+        true,
+
+      checkIn:
+        parsedSettings.checkIn ?? true,
+
+      stationaryMinutes:
+        parsedSettings.stationaryMinutes ??
+        5,
+
+      audibleAlert:
+        parsedSettings.audibleAlert ??
+        true,
+
+      responseMinutes:
+        parsedSettings.responseMinutes ??
+        1,
+
+      localSupport:
+        parsedSettings.localSupport ??
+        true,
+
+      taxiPickup:
+        parsedSettings.taxiPickup ??
+        true,
+
+      contacts:
+        Array.isArray(
+          parsedSettings.contacts,
+        )
+          ? parsedSettings.contacts
+          : ["Anna"],
     };
   }
 
@@ -1797,11 +2542,15 @@ function loadSafetySettings() {
 }
 
 function saveSafetySettings() {
-  localStorage.setItem("safetySettings", JSON.stringify(safetySettings));
+  localStorage.setItem(
+    "safetySettings",
+    JSON.stringify(safetySettings),
+  );
 }
 
 function openSettingsPanel() {
   renderSettingsPanel();
+
   showElement(settingsPanel);
 }
 
@@ -1810,47 +2559,69 @@ function closeSettingsPanel() {
 }
 
 function updateSafetySettingsFromPanel() {
-  safetySettings.emergencyContact = featureEmergencyContact.checked;
+  safetySettings.emergencyContact =
+    featureEmergencyContact.checked;
 
-  safetySettings.checkIn = featureCheckIn.checked;
+  safetySettings.checkIn =
+    featureCheckIn.checked;
 
-  safetySettings.stationaryMinutes = Math.min(
-    20,
-    Math.max(
-      5,
-      Number(stationaryMinutes.value) || 5,
-    ),
-  );
+  safetySettings.stationaryMinutes =
+    Math.min(
+      20,
+      Math.max(
+        5,
+        Number(
+          stationaryMinutes.value,
+        ) || 5,
+      ),
+    );
 
-  safetySettings.audibleAlert = featureAudibleAlert.checked;
+  safetySettings.audibleAlert =
+    featureAudibleAlert.checked;
 
-  safetySettings.responseMinutes = Math.min(
-    10,
-    Math.max(
-      1,
-      Number(responseMinutes.value) || 1,
-    ),
-  );
+  safetySettings.responseMinutes =
+    Math.min(
+      10,
+      Math.max(
+        1,
+        Number(
+          responseMinutes.value,
+        ) || 1,
+      ),
+    );
 
-  safetySettings.localSupport = featureLocalSupport.checked;
+  safetySettings.localSupport =
+    featureLocalSupport.checked;
 
-  safetySettings.taxiPickup = featureTaxiPickup.checked;
+  safetySettings.taxiPickup =
+    featureTaxiPickup.checked;
 
   saveSafetySettings();
+
   renderSettingsPanel();
+
   applyFeatureVisibility();
 }
 
 function renderSettingsPanel() {
-  featureEmergencyContact.checked = safetySettings.emergencyContact;
+  featureEmergencyContact.checked =
+    safetySettings.emergencyContact;
 
-  featureCheckIn.checked = safetySettings.checkIn;
+  featureCheckIn.checked =
+    safetySettings.checkIn;
 
-  stationaryMinutes.value = String(safetySettings.stationaryMinutes);
+  stationaryMinutes.value =
+    String(
+      safetySettings.stationaryMinutes,
+    );
 
-  featureAudibleAlert.checked = safetySettings.audibleAlert;
+  featureAudibleAlert.checked =
+    safetySettings.audibleAlert;
 
-  responseMinutes.value = String(safetySettings.responseMinutes);
+  responseMinutes.value =
+    String(
+      safetySettings.responseMinutes,
+    );
 
   checkInSettings.classList.toggle(
     "hidden",
@@ -1862,9 +2633,11 @@ function renderSettingsPanel() {
     !safetySettings.audibleAlert,
   );
 
-  featureLocalSupport.checked = safetySettings.localSupport;
+  featureLocalSupport.checked =
+    safetySettings.localSupport;
 
-  featureTaxiPickup.checked = safetySettings.taxiPickup;
+  featureTaxiPickup.checked =
+    safetySettings.taxiPickup;
 
   contactManagement.classList.toggle(
     "hidden",
@@ -1873,65 +2646,97 @@ function renderSettingsPanel() {
 
   contactList.innerHTML = "";
 
-  if (!safetySettings.contacts || safetySettings.contacts.length === 0) {
+  if (
+    !safetySettings.contacts ||
+    safetySettings.contacts.length === 0
+  ) {
     contactList.innerHTML =
       "<p class='empty-contact-note'>No contact added.</p>";
   } else {
-    safetySettings.contacts.forEach(function (contactName, index) {
-      const contactItem = document.createElement("div");
+    safetySettings.contacts.forEach(
+      function (
+        contactName,
+        index,
+      ) {
+        const contactItem =
+          document.createElement("div");
 
-      contactItem.className = "contact-item";
+        contactItem.className =
+          "contact-item";
 
-      contactItem.innerHTML =
-        "<span>" +
-        contactName +
-        "</span>" +
-        "<button type='button'>Delete</button>";
+        contactItem.innerHTML =
+          "<span>" +
+          contactName +
+          "</span>" +
+          "<button type='button'>Delete</button>";
 
-      contactItem
-        .querySelector("button")
-        .addEventListener("click", function () {
-          deleteEmergencyContact(index);
-        });
+        contactItem
+          .querySelector("button")
+          .addEventListener(
+            "click",
+            function () {
+              deleteEmergencyContact(
+                index,
+              );
+            },
+          );
 
-      contactList.appendChild(contactItem);
-    });
+        contactList.appendChild(
+          contactItem,
+        );
+      },
+    );
   }
 }
 
 function addEmergencyContact() {
-  const newContact = contactNameInput.value.trim();
+  const newContact =
+    contactNameInput.value.trim();
 
   if (!newContact) {
     return;
   }
 
-  safetySettings.contacts.push(newContact);
+  safetySettings.contacts.push(
+    newContact,
+  );
 
   contactNameInput.value = "";
 
   saveSafetySettings();
+
   renderSettingsPanel();
 }
 
-function deleteEmergencyContact(index) {
-  safetySettings.contacts.splice(index, 1);
+function deleteEmergencyContact(
+  index,
+) {
+  safetySettings.contacts.splice(
+    index,
+    1,
+  );
 
   saveSafetySettings();
+
   renderSettingsPanel();
 }
 
 function applyFeatureVisibility() {
   if (!safetySettings.taxiPickup) {
     hideElement(taxiOptionCard);
+
     hideElement(taxiModeCard);
+
     clearTaxiMarkers();
+
     clearTaxiRoute();
+
     clearCurrentPositionMarker();
   }
 
   if (!safetySettings.checkIn) {
     clearSafetyTimers();
+
     hideElement(checkInOverlay);
   }
 
@@ -1945,7 +2750,10 @@ function getEmergencyContactStatusHtml() {
     return "";
   }
 
-  if (!safetySettings.contacts || safetySettings.contacts.length === 0) {
+  if (
+    !safetySettings.contacts ||
+    safetySettings.contacts.length === 0
+  ) {
     return (
       "<div class='contact-alert'>" +
       "<strong>No emergency contact set</strong>" +
@@ -1954,7 +2762,8 @@ function getEmergencyContactStatusHtml() {
     );
   }
 
-  const contactText = safetySettings.contacts.join(", ");
+  const contactText =
+    safetySettings.contacts.join(", ");
 
   return (
     "<div class='contact-alert'>" +
@@ -1967,7 +2776,9 @@ function getEmergencyContactStatusHtml() {
 }
 
 function setSafeJourneyStatus(note) {
-  document.getElementById("journeyStatus").innerHTML =
+  document
+    .getElementById("journeyStatus")
+    .innerHTML =
     getEmergencyContactStatusHtml() +
     "<p class='journey-note'>" +
     note +
