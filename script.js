@@ -6,12 +6,12 @@
 
 // Die vorhandenen Demo-Zeiten bleiben unverändert, damit während der
 // Präsentation genug Zeit zum Erklären bleibt.
-const MONITORING_STATUS_DELAY_MS = 7000;
-const CHECK_IN_TRIGGER_DELAY_MS = 14000;
+const MONITORING_STATUS_DELAY_MS = 6000;
+const CHECK_IN_TRIGGER_DELAY_MS = 12000;
 
 // Nach dem sichtbaren Check-in bleibt genug Zeit zum Erklären und Reagieren.
 // Im realen Produkt wäre dieser Wert deutlich länger und fachlich zu validieren.
-const CHECK_IN_RESPONSE_TIMEOUT_MS = 30000;
+const CHECK_IN_RESPONSE_TIMEOUT_MS = 25000;
 
 let map = null;
 let RouteClass = null;
@@ -30,11 +30,13 @@ let checkInResponseTimer = null;
 let safetyDataMarkers = [];
 let currentSafetyProfile = null;
 let taxiMarkers = [];
+let taxiPickupOptions = [];
 let taxiRouteLine = null;
 let simulatedCurrentPosition = null;
 let currentPositionMarker = null;
 let safetySettings = loadSafetySettings();
 let activeInfoWindow = null;
+
 
 const routeCard = document.getElementById("routeCard");
 const journeyCard = document.getElementById("journeyCard");
@@ -269,6 +271,7 @@ async function searchNormalRoute() {
     safeRoute = null;
     safeRoutePoint = null;
     safeRouteLoaded = false;
+    taxiPickupOptions = [];
 
     normalRoute = await computeRoute(startAddress, destinationAddress, null);
 
@@ -1201,6 +1204,10 @@ function confirmEmergencyEscalation() {
   );
 
   hideElement(document.getElementById("escalateButton"));
+
+  setTimeout(function () {
+    hideElement(supportOverlay);
+  }, 2000);
 }
 
 function closeSupport() {
@@ -1517,9 +1524,6 @@ async function createTaxiPickupMarkers() {
     return;
   }
 
-  const numberOfPickups =
-    getRandomNumber(1, 4);
-
   const pickupTitles = [
     "Taxi pickup point",
     "Taxi stand",
@@ -1527,67 +1531,74 @@ async function createTaxiPickupMarkers() {
     "Public pickup point"
   ];
 
-  const validPickups = [];
+  if (taxiPickupOptions.length === 0) {
+    const numberOfPickups =
+      getRandomNumber(1, 4);
 
-  let attempts = 0;
-  const maxAttempts = 30;
+    const validPickups = [];
 
-  while (
-    validPickups.length < numberOfPickups &&
-    attempts < maxAttempts
-  ) {
-    attempts++;
+    let attempts = 0;
+    const maxAttempts = 30;
 
-    const position =
-      generateNearbyTaxiPoint(
-        simulatedCurrentPosition
-      );
+    while (
+      validPickups.length < numberOfPickups &&
+      attempts < maxAttempts
+    ) {
+      attempts++;
 
-    try {
-      const walkingRoute =
-        await computeRoute(
-          simulatedCurrentPosition,
-          position,
-          null
+      const position =
+        generateNearbyTaxiPoint(
+          simulatedCurrentPosition
         );
 
-      const walkingMinutes =
-        Math.max(
-          1,
-          Math.round(
-            walkingRoute.durationMillis / 60000
-          )
-        );
+      try {
+        const walkingRoute =
+          await computeRoute(
+            simulatedCurrentPosition,
+            position,
+            null
+          );
 
-      if (walkingMinutes > 12) {
-        continue;
+        const walkingMinutes =
+          Math.max(
+            1,
+            Math.round(
+              walkingRoute.durationMillis / 60000
+            )
+          );
+
+        if (walkingMinutes > 12) {
+          continue;
+        }
+
+        validPickups.push({
+          title:
+            pickupTitles[
+              validPickups.length %
+              pickupTitles.length
+            ],
+          position: position,
+          walkingMinutes: walkingMinutes
+        });
+      } catch (error) {
+        console.error(
+          "Taxi pickup candidate skipped.",
+          error
+        );
       }
-
-      validPickups.push({
-        title:
-          pickupTitles[
-            validPickups.length %
-            pickupTitles.length
-          ],
-        position: position,
-        walkingMinutes: walkingMinutes
-      });
-    } catch (error) {
-      console.error(
-        "Taxi pickup candidate skipped.",
-        error
-      );
     }
+
+    validPickups.sort(function (a, b) {
+      return (
+        a.walkingMinutes -
+        b.walkingMinutes
+      );
+    });
+
+    taxiPickupOptions = validPickups;
   }
 
-  validPickups.sort(function (a, b) {
-    return (
-      a.walkingMinutes -
-      b.walkingMinutes
-    );
-  });
-
-  validPickups.forEach(function (option) {
+  taxiPickupOptions.forEach(function (option) {
     const marker =
       new google.maps.Marker({
         map: map,
