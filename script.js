@@ -405,7 +405,7 @@ async function classifyLocationContext(point) {
 
   const population = Number(nearestPlace.population) || 0;
 
-  return population >= 10000 ? "urban" : "rural";
+  return population >= 15000 ? "urban" : "rural";
 }
 
 async function determineAreaType(route) {
