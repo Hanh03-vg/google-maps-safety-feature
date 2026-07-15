@@ -357,8 +357,8 @@ async function searchNormalRoute() {
   }
 }
 
-async function getNearestPopulatedPlace(point) {
-  const url = `https://countries.dev/places/near?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}&limit=20`;
+async function getNearbyPopulatedPlaces(point) {
+  const url = `https://countries.dev/places/near?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}&limit=100`;
   const response = await fetch(url);
 
   if (!response.ok) {
@@ -368,10 +368,10 @@ async function getNearestPopulatedPlace(point) {
   const places = await response.json();
 
   if (!Array.isArray(places)) {
-    return null;
+    return [];
   }
 
-  return places.find((place) => place.featureClass === "P") || null;
+  return places.filter((place) => place.featureClass === "P");
 }
 
 function getPlaceDistanceKm(place) {
@@ -391,21 +391,19 @@ function getPlaceDistanceKm(place) {
 }
 
 async function classifyLocationContext(point) {
-  const nearestPlace = await getNearestPopulatedPlace(point);
+  const populatedPlaces = await getNearbyPopulatedPlaces(point);
+  const nearbyUrbanPlace = populatedPlaces.find((place) => {
+    const distanceKm = getPlaceDistanceKm(place);
+    const population = Number(place.population) || 0;
 
-  if (!nearestPlace) {
-    return "rural";
-  }
+    return (
+      distanceKm !== null &&
+      distanceKm <= URBAN_CITY_DISTANCE_KM &&
+      population >= 15000
+    );
+  });
 
-  const distanceKm = getPlaceDistanceKm(nearestPlace);
-
-  if (distanceKm === null || distanceKm > URBAN_CITY_DISTANCE_KM) {
-    return "rural";
-  }
-
-  const population = Number(nearestPlace.population) || 0;
-
-  return population >= 15000 ? "urban" : "rural";
+  return nearbyUrbanPlace ? "urban" : "rural";
 }
 
 async function determineAreaType(route) {
