@@ -6,12 +6,12 @@
 
 // Die vorhandenen Demo-Zeiten bleiben unverändert, damit während der
 // Präsentation genug Zeit zum Erklären bleibt.
-const MONITORING_STATUS_DELAY_MS = 6000;
-const CHECK_IN_TRIGGER_DELAY_MS = 12000;
+const MONITORING_STATUS_DELAY_MS = 7000;
+const CHECK_IN_TRIGGER_DELAY_MS = 17000;
 
 // Nach dem sichtbaren Check-in bleibt genug Zeit zum Erklären und Reagieren.
 // Im realen Produkt wäre dieser Wert deutlich länger und fachlich zu validieren.
-const CHECK_IN_RESPONSE_TIMEOUT_MS = 25000;
+const CHECK_IN_RESPONSE_TIMEOUT_MS = 27000;
 
 const URBAN_CITY_DISTANCE_KM = 3;
 
@@ -723,12 +723,11 @@ async function findSafeRouteWithinLimit(
       safePoint,
     );
 
-    const detourMinutes = getDetourMinutes(candidateRoute);
-    const hasSelfOverlap = routeHasSelfOverlap(candidateRoute);
-
-    if (hasSelfOverlap) {
+    if (routeHasSelfOverlap(candidateRoute)) {
       continue;
     }
+
+    const detourMinutes = getDetourMinutes(candidateRoute);
 
     if (
       detourMinutes > 0 &&
@@ -740,10 +739,7 @@ async function findSafeRouteWithinLimit(
       bestPositiveSafePoint = safePoint;
     }
 
-    if (
-      detourMinutes === 0 &&
-      !zeroDetourRoute
-    ) {
+    if (detourMinutes === 0 && !zeroDetourRoute) {
       zeroDetourRoute = candidateRoute;
       zeroDetourSafePoint = safePoint;
     }
@@ -2191,6 +2187,30 @@ function generateNearbyTaxiPoint(
   };
 }
 
+function estimateTaxiWalkingMinutes(
+  currentPosition,
+  pickupPosition,
+) {
+  const straightLineDistance =
+    calculateDistanceMeters(
+      currentPosition,
+      pickupPosition,
+    );
+
+  const estimatedWalkingDistance =
+    straightLineDistance * 1.2;
+
+  const walkingSpeedMetersPerMinute = 75;
+
+  return Math.max(
+    1,
+    Math.round(
+      estimatedWalkingDistance /
+        walkingSpeedMetersPerMinute,
+    ),
+  );
+}
+
 async function createTaxiPickupMarkers() {
   if (!simulatedCurrentPosition) {
     return;
@@ -2214,12 +2234,10 @@ async function createTaxiPickupMarkers() {
     const validPickups = [];
 
     let attempts = 0;
-
     const maxAttempts = 30;
 
     while (
-      validPickups.length <
-        numberOfPickups &&
+      validPickups.length < numberOfPickups &&
       attempts < maxAttempts
     ) {
       attempts++;
@@ -2229,43 +2247,25 @@ async function createTaxiPickupMarkers() {
           simulatedCurrentPosition,
         );
 
-      try {
-        const walkingRoute =
-          await computeRoute(
-            simulatedCurrentPosition,
-            position,
-            null,
-          );
-
-        const walkingMinutes =
-          Math.max(
-            1,
-            Math.round(
-              walkingRoute.durationMillis /
-                60000,
-            ),
-          );
-
-        if (walkingMinutes > 12) {
-          continue;
-        }
-
-        validPickups.push({
-          title:
-            pickupTitles[
-              validPickups.length %
-                pickupTitles.length
-            ],
-          position: position,
-          walkingMinutes:
-            walkingMinutes,
-        });
-      } catch (error) {
-        console.error(
-          "Taxi pickup candidate skipped.",
-          error,
+      const walkingMinutes =
+        estimateTaxiWalkingMinutes(
+          simulatedCurrentPosition,
+          position,
         );
+
+      if (walkingMinutes > 12) {
+        continue;
       }
+
+      validPickups.push({
+        title:
+          pickupTitles[
+            validPickups.length %
+              pickupTitles.length
+          ],
+        position: position,
+        walkingMinutes: walkingMinutes,
+      });
     }
 
     validPickups.sort(
@@ -2277,8 +2277,7 @@ async function createTaxiPickupMarkers() {
       },
     );
 
-    taxiPickupOptions =
-      validPickups;
+    taxiPickupOptions = validPickups;
   }
 
   taxiPickupOptions.forEach(
@@ -2331,8 +2330,7 @@ async function createTaxiPickupMarkers() {
             activeInfoWindow.close();
           }
 
-          activeInfoWindow =
-            infoWindow;
+          activeInfoWindow = infoWindow;
 
           infoWindow.open(
             map,
